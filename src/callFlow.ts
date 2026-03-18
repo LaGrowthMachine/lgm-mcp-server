@@ -1,4 +1,5 @@
-const LGM_API_URL = process.env.LGM_API_URL || 'https://api.lagrowthmachine.com';
+import { getApiUrl } from './requestContext';
+
 const TIMEOUT_MS = 10_000;
 const MAX_RETRIES = 2;
 
@@ -25,10 +26,11 @@ export const callFlow = async (
     const method = options?.method || 'GET';
     const retries = options?.retries ?? MAX_RETRIES;
 
-    const url = new URL(`/flow${path}`, LGM_API_URL);
+    const apiUrl = getApiUrl();
+    const url = new URL(`/flow${path}`, apiUrl);
 
     // Debug logs
-    console.error(`[MCP DEBUG] API URL: ${LGM_API_URL}`);
+    console.error(`[MCP DEBUG] API URL: ${apiUrl}`);
     console.error(`[MCP DEBUG] Full URL: ${url.toString()}`);
     console.error(`[MCP DEBUG] API Key present: ${!!apiKey}`);
     console.error(`[MCP DEBUG] API Key length: ${apiKey.length}`);

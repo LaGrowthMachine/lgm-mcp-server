@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { callFlow, McpFlowError } from './callFlow';
 import { trackMcpEvent } from './tracking';
+import { getApiKey } from './requestContext';
 
 const formatTextContent = (title: string, data: unknown): { content: Array<{ type: 'text'; text: string }> } => {
     return {
@@ -40,7 +41,7 @@ export const registerTools = (server: McpServer) => {
             search: z.string().optional().describe('Search campaigns by name'),
         },
         async (params, extra) => {
-            const apiKey = extra?.authInfo?.token || process.env.LGM_API_KEY || '';
+            const apiKey = getApiKey() || extra?.authInfo?.token || '';
             try {
                 const data = await callFlow(apiKey, '/campaigns', params);
                 await trackMcpEvent(apiKey, 'mcp_tool_called', { toolName: 'list_campaigns' });
@@ -59,7 +60,7 @@ export const registerTools = (server: McpServer) => {
             campaignId: z.string().describe('The campaign ID (24-character hex string)'),
         },
         async (params, extra) => {
-            const apiKey = extra?.authInfo?.token || process.env.LGM_API_KEY || '';
+            const apiKey = getApiKey() || extra?.authInfo?.token || '';
             try {
                 const data = await callFlow(apiKey, `/campaigns/${params.campaignId}/stats`);
                 await trackMcpEvent(apiKey, 'mcp_tool_called', { toolName: 'get_campaign_stats' });
@@ -80,7 +81,7 @@ export const registerTools = (server: McpServer) => {
             limit: z.number().optional().default(25).describe('Maximum number of leads to return (max 100)'),
         },
         async (params, extra) => {
-            const apiKey = extra?.authInfo?.token || process.env.LGM_API_KEY || '';
+            const apiKey = getApiKey() || extra?.authInfo?.token || '';
             try {
                 const data = await callFlow(apiKey, `/audiences/${params.audienceId}/leads`, {
                     skip: params.skip,
@@ -105,7 +106,7 @@ export const registerTools = (server: McpServer) => {
             limit: z.number().optional().default(25).describe('Maximum number of logs to return (max 100)'),
         },
         async (params, extra) => {
-            const apiKey = extra?.authInfo?.token || process.env.LGM_API_KEY || '';
+            const apiKey = getApiKey() || extra?.authInfo?.token || '';
             try {
                 const data = await callFlow(apiKey, `/leads/${params.leadId}/logs`, {
                     identityId: params.identityId,
@@ -129,7 +130,7 @@ export const registerTools = (server: McpServer) => {
             identityId: z.string().optional().describe('Filter conversations by identity ID'),
         },
         async (params, extra) => {
-            const apiKey = extra?.authInfo?.token || process.env.LGM_API_KEY || '';
+            const apiKey = getApiKey() || extra?.authInfo?.token || '';
             try {
                 const data = await callFlow(apiKey, `/leads/${params.leadId}/conversations`, {
                     identityId: params.identityId,
@@ -150,7 +151,7 @@ export const registerTools = (server: McpServer) => {
             conversationId: z.string().describe('The conversation ID (24-character hex string)'),
         },
         async (params, extra) => {
-            const apiKey = extra?.authInfo?.token || process.env.LGM_API_KEY || '';
+            const apiKey = getApiKey() || extra?.authInfo?.token || '';
             try {
                 const data = await callFlow(apiKey, `/conversations/${params.conversationId}/messages`);
                 await trackMcpEvent(apiKey, 'mcp_tool_called', { toolName: 'get_conversation_messages' });
@@ -171,7 +172,7 @@ export const registerTools = (server: McpServer) => {
             campaignId: z.string().describe('The campaign ID (24-character hex string)'),
         },
         async (params, extra) => {
-            const apiKey = extra?.authInfo?.token || process.env.LGM_API_KEY || '';
+            const apiKey = getApiKey() || extra?.authInfo?.token || '';
             try {
                 const data = await callFlow(apiKey, `/campaigns/${params.campaignId}/messages`);
                 await trackMcpEvent(apiKey, 'mcp_tool_called', { toolName: 'get_campaign_messages' });
@@ -190,7 +191,7 @@ export const registerTools = (server: McpServer) => {
             audienceId: z.string().describe('The audience ID (24-character hex string)'),
         },
         async (params, extra) => {
-            const apiKey = extra?.authInfo?.token || process.env.LGM_API_KEY || '';
+            const apiKey = getApiKey() || extra?.authInfo?.token || '';
             try {
                 const data = await callFlow(apiKey, `/audiences/${params.audienceId}/detail`);
                 await trackMcpEvent(apiKey, 'mcp_tool_called', { toolName: 'get_audience' });
@@ -213,7 +214,7 @@ export const registerTools = (server: McpServer) => {
             channel: z.string().optional().describe('Optional channel scope (e.g., "linkedin", "email")'),
         },
         async (params, extra) => {
-            const apiKey = extra?.authInfo?.token || process.env.LGM_API_KEY || '';
+            const apiKey = getApiKey() || extra?.authInfo?.token || '';
             try {
                 const data = await callFlow(
                     apiKey,
@@ -245,7 +246,7 @@ export const registerTools = (server: McpServer) => {
             subjectHtml: z.string().optional().describe('New HTML content for the email subject'),
         },
         async (params, extra) => {
-            const apiKey = extra?.authInfo?.token || process.env.LGM_API_KEY || '';
+            const apiKey = getApiKey() || extra?.authInfo?.token || '';
             if (!params.contentHtml && !params.subjectHtml) {
                 return handleToolError(new Error('At least one of contentHtml or subjectHtml must be provided'));
             }

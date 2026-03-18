@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "${PORT:-3001}:3001"
+    expose:
+      - "3001"
     environment:
       - NODE_ENV=production
       - LGM_API_URL=${LGM_API_URL:-https://api.lagrowthmachine.com}

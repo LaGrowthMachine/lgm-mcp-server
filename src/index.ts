@@ -2,8 +2,8 @@ import { createMcpServer } from './server';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express from 'express';
+import { requestContext, isAllowedApiUrl, getApiUrl } from './requestContext';
 
-const LGM_API_URL = process.env.LGM_API_URL || 'https://api.lagrowthmachine.com';
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const TRANSPORT = process.env.LGM_MCP_TRANSPORT || 'http';
 
@@ -20,7 +20,7 @@ const startHttpServer = async () => {
         try {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 3000);
-            await fetch(`${LGM_API_URL}/flow/members`, {
+            await fetch(`${getApiUrl()}/flow/members`, {
                 method: 'HEAD',
                 signal: controller.signal,
             }).catch(() => {
@@ -37,17 +37,32 @@ const startHttpServer = async () => {
     const server = createMcpServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
-    app.post('/mcp', async (req, res) => {
-        await transport.handleRequest(req, res);
-    });
+    // Middleware: extract custom headers and run in async context
+    const withRequestContext = (handler: (req: express.Request, res: express.Response) => Promise<void>) => {
+        return async (req: express.Request, res: express.Response) => {
+            const customApiUrl = req.headers['x-lgm-api-url'] as string | undefined;
+            const apiKey = req.headers['x-lgm-api-key'] as string | undefined;
 
-    app.get('/mcp', async (req, res) => {
-        await transport.handleRequest(req, res);
-    });
+            if (customApiUrl && !isAllowedApiUrl(customApiUrl)) {
+                res.status(400).json({ error: 'Invalid X-LGM-API-URL. Must be a *.lagrowthmachine.com or localhost URL.' });
+                return;
+            }
 
-    app.delete('/mcp', async (req, res) => {
+            await requestContext.run({ apiUrl: customApiUrl, apiKey }, () => handler(req, res));
+        };
+    };
+
+    app.post('/mcp', withRequestContext(async (req, res) => {
         await transport.handleRequest(req, res);
-    });
+    }));
+
+    app.get('/mcp', withRequestContext(async (req, res) => {
+        await transport.handleRequest(req, res);
+    }));
+
+    app.delete('/mcp', withRequestContext(async (req, res) => {
+        await transport.handleRequest(req, res);
+    }));
 
     await server.connect(transport);
 
