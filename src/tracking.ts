@@ -7,7 +7,7 @@ export const trackMcpEvent = async (
 ): Promise<void> => {
     try {
         await callFlow(apiKey, '/tracking/mcp', { eventName, properties }, { method: 'POST' });
-    } catch {
-        // Tracking errors should not break tool execution
+    } catch (error) {
+        console.error("Tracking event failed:", error);
     }
 };
