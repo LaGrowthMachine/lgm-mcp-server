@@ -147,7 +147,6 @@ claude mcp add --transport stdio --scope project LaGrowthMachineLocal node /chem
 | `get_lead_conversations`    | Conversations d'un lead (tous canaux)          | Lecture          |
 | `get_conversation_messages` | Messages d'une conversation                    | Lecture          |
 | `save_identity_preference`  | Sauvegarder une preference d'identite          | Ecriture         |
-| `update_campaign_message`   | Modifier un template de message                | Ecriture         |
 
 ---
 
