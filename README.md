@@ -100,56 +100,36 @@ Avec cette config, `docker compose up` merge automatiquement les deux fichiers e
 
 ```bash
 # Scope projet (mcp.json a la racine du repo)
-claude mcp add --transport http --scope project \
-  LaGrowthMachineLocal http://localhost:3001/mcp \
-  --header "X-LGM-API-KEY: <api-key>" \
-  --header "X-LGM-API-URL: http://localhost:8081"
+claude mcp add --transport http --scope project LaGrowthMachineLocal http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: http://localhost:8081"
 
 # Scope user (config globale Claude)
-claude mcp add --transport http --scope user \
-  LaGrowthMachineLocal http://localhost:3001/mcp \
-  --header "X-LGM-API-KEY: <api-key>" \
-  --header "X-LGM-API-URL: http://localhost:8081"
+claude mcp add --transport http --scope user LaGrowthMachineLocal http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: http://localhost:8081"
 ```
 
 ### Feature branch
 
 ```bash
 # Scope projet
-claude mcp add --transport http --scope project \
-  LaGrowthMachineFeature http://localhost:3001/mcp \
-  --header "X-LGM-API-KEY: <api-key>" \
-  --header "X-LGM-API-URL: https://<branch>-api.preview.lgmfeatureenv7.com"
+claude mcp add --transport http --scope project LaGrowthMachineFeature http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: https://<branch>-api.preview.lgmfeatureenv7.com"
 
 # Scope user
-claude mcp add --transport http --scope user \
-  LaGrowthMachineFeature http://localhost:3001/mcp \
-  --header "X-LGM-API-KEY: <api-key>" \
-  --header "X-LGM-API-URL: https://<branch>-api.preview.lgmfeatureenv7.com"
+claude mcp add --transport http --scope user LaGrowthMachineFeature http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: https://<branch>-api.preview.lgmfeatureenv7.com"
 ```
 
 ### Production
 
 ```bash
 # Scope projet
-claude mcp add --transport http --scope project \
-  LaGrowthMachine https://mcp.lagrowthmachine.com/mcp \
-  --header "X-LGM-API-KEY: <api-key>"
+claude mcp add --transport http --scope project LaGrowthMachine https://mcpapp.lagrowthmachine.com/mcp --header "X-LGM-API-KEY: <api-key>"
 
 # Scope user
-claude mcp add --transport http --scope user \
-  LaGrowthMachine https://mcp.lagrowthmachine.com/mcp \
-  --header "X-LGM-API-KEY: <api-key>"
+claude mcp add --transport http --scope user LaGrowthMachine https://mcpapp.lagrowthmachine.com/mcp --header "X-LGM-API-KEY: <api-key>"
 ```
 
 ### Mode stdio (sans Docker)
 
 ```bash
-claude mcp add --transport stdio --scope project \
-  LaGrowthMachineLocal node /chemin/vers/lgm-mcp-server/dist/index.js \
-  --env LGM_MCP_TRANSPORT=stdio \
-  --env LGM_API_URL=http://localhost:8081 \
-  --env LGM_API_KEY=<api-key>
+claude mcp add --transport stdio --scope project LaGrowthMachineLocal node /chemin/vers/lgm-mcp-server/dist/index.js --env LGM_MCP_TRANSPORT=stdio --env LGM_API_URL=http://localhost:8081 --env LGM_API_KEY=<api-key>
 ```
 
 ---
