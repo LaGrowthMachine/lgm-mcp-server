@@ -4,3 +4,5 @@ dist/
 .env.*
 *.log
 docker-compose.override.yml
+.DS_Store
+*.mcpb

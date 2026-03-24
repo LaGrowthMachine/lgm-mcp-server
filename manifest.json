@@ -1,0 +1,76 @@
+{
+  "manifest_version": "0.4",
+  "name": "LGM",
+  "version": "1.0.0",
+  "description": "Connect LaGrowthMachine to Claude — manage campaigns, leads, audiences and conversations directly from AI.",
+  "author": {
+    "name": "LaGrowthMachine"
+  },
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/stdio.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/stdio.js"],
+      "env": {
+        "LGM_MCP_TRANSPORT": "stdio",
+        "LGM_API_KEY": "${user_config.api_key}",
+        "LGM_API_URL": "${user_config.api_url}"
+      }
+    }
+  },
+  "user_config": {
+    "api_key": {
+      "type": "string",
+      "title": "LGM API Key",
+      "description": "Your LaGrowthMachine API key (available in Settings > API)",
+      "required": true,
+      "sensitive": true
+    },
+    "api_url": {
+      "type": "string",
+      "title": "API URL",
+      "description": "LGM API URL (default: https://api.lagrowthmachine.com)",
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "list_campaigns",
+      "description": "List all campaigns with filters (status, search) and pagination."
+    },
+    {
+      "name": "get_campaign_stats",
+      "description": "Get detailed statistics for a campaign (acceptance rate, reply rate, conversions)."
+    },
+    {
+      "name": "get_audience_leads",
+      "description": "List leads in an audience with details (name, company, job title, email, LinkedIn)."
+    },
+    {
+      "name": "get_lead_logs",
+      "description": "Get activity logs for a lead (emails, LinkedIn messages, connection requests)."
+    },
+    {
+      "name": "get_lead_conversations",
+      "description": "Get all conversations with a lead across channels (LinkedIn, email)."
+    },
+    {
+      "name": "get_conversation_messages",
+      "description": "Get all messages in a conversation with content and timestamps."
+    },
+    {
+      "name": "get_campaign_messages",
+      "description": "Get message templates for a campaign with HTML content and sequence order."
+    },
+    {
+      "name": "get_audience",
+      "description": "Get detailed audience info (name, description, size, type, import status)."
+    },
+    {
+      "name": "save_identity_preference",
+      "description": "Save a preference for an identity to personalize AI-generated content."
+    }
+  ]
+}

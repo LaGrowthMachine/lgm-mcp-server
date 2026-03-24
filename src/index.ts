@@ -127,9 +127,16 @@ const startHttpServer = async () => {
 };
 
 const startStdioServer = async () => {
-  const server = createMcpServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  try {
+    console.error("[LGM] Starting stdio server...");
+    const server = createMcpServer();
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error("[LGM] Stdio server connected successfully");
+  } catch (error) {
+    console.error("[LGM] Stdio server error:", error);
+    process.exit(1);
+  }
 };
 
 if (TRANSPORT === "stdio") {
