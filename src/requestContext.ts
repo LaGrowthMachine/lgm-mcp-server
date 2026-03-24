@@ -18,12 +18,19 @@ export const isAllowedApiUrl = (url: string): boolean => {
   return ALLOWED_API_URL_PATTERNS.some((pattern) => pattern.test(url));
 };
 
+const resolveEnvUrl = (value?: string): string | undefined => {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith("${")) return undefined;
+  return trimmed;
+};
+
 export const getApiUrl = (): string => {
   const context = requestContext.getStore();
   return (
     context?.apiUrl ||
-    process.env.LGM_API_URL ||
-    "https://api.lagrowthmachine.com"
+    resolveEnvUrl(process.env.LGM_API_URL) ||
+    "https://apiv2.lagrowthmachine.com"
   );
 };
 

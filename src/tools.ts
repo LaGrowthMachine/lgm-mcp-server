@@ -56,7 +56,7 @@ export const registerTools = (server: McpServer) => {
           .string()
           .optional()
           .describe(
-            'Filter by campaign status (e.g., "running", "paused", "ready", "canceled")',
+            'Filter by campaign status (e.g., "RUNNING", "PAUSED", "READY", "CANCELED")',
           ),
         skip: z
           .number()
@@ -67,7 +67,7 @@ export const registerTools = (server: McpServer) => {
           .number()
           .optional()
           .default(25)
-          .describe("Maximum number of campaigns to return (max 100)"),
+          .describe("Maximum number of campaigns to return (max 25)"),
         search: z.string().optional().describe("Search campaigns by name"),
       },
       annotations: { readOnlyHint: true },
@@ -342,9 +342,7 @@ export const registerTools = (server: McpServer) => {
           .describe("The identity ID (24-character hex string)"),
         category: z
           .string()
-          .describe(
-            'Preference category (e.g., "tone", "language", "style")',
-          ),
+          .describe('Preference category (e.g., "tone", "language", "style")'),
         key: z.string().describe("Preference key within the category"),
         value: z.string().describe("Preference value (max 500 characters)"),
         channel: z
@@ -352,7 +350,7 @@ export const registerTools = (server: McpServer) => {
           .optional()
           .describe('Optional channel scope (e.g., "linkedin", "email")'),
       },
-      annotations: { readOnlyHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: true },
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
@@ -377,5 +375,4 @@ export const registerTools = (server: McpServer) => {
       }
     },
   );
-
 };

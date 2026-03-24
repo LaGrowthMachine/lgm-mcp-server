@@ -1,171 +1,133 @@
-# LGM MCP Server
+# LaGrowthMachine — Claude Desktop Extension
 
-Serveur MCP (Model Context Protocol) pour LaGrowthMachine. Expose les fonctionnalites LGM aux agents IA externes (Claude Desktop, Claude Code, Cursor, etc.).
+Connect [LaGrowthMachine](https://lagrowthmachine.com) to Claude Desktop. Manage your multichannel outreach campaigns, analyze performance, explore leads, and read conversations — all through natural language.
 
-## Transports disponibles
+## Features
 
-| Transport                 | Usage               | Description                                               |
-| ------------------------- | ------------------- | --------------------------------------------------------- |
-| **HTTP** (StreamableHTTP) | Production / Remote | Serveur Express sur le port `3001`, endpoint `/mcp`       |
-| **stdio**                 | Local uniquement    | Communication via stdin/stdout, pour Claude Code en local |
+- **Campaign management** — List, filter, and search your outreach campaigns
+- **Performance analytics** — Get detailed stats: acceptance rate, reply rate, conversions
+- **Lead exploration** — Browse leads with full details (name, company, job title, email, LinkedIn)
+- **Activity tracking** — View engagement history: emails sent, LinkedIn messages, connection requests
+- **Conversation reader** — Read full message threads across all channels
+- **AI preferences** — Save identity preferences to personalize AI-generated content
 
-## Authentification
+## Installation
 
-Chaque requete doit fournir une API key LGM via l'un de ces headers :
+1. Download the `lgm-mcp.mcpb` file
+2. Double-click to open with Claude Desktop
+3. Click **Install**
+4. Enter your LGM API key (available in [Settings > API](https://app.lagrowthmachine.com/settings/api))
+5. Start chatting — ask Claude about your campaigns
 
-- `X-LGM-API-KEY: <api-key>` (recommande)
-- `Authorization: Bearer <api-key>`
+Or install from the Claude Desktop extension directory: **Settings > Extensions > Browse > "LaGrowthMachine"**.
 
-Le header optionnel `X-LGM-API-URL` permet de rediriger les appels vers une API specifique (feature branch, staging, etc.). Les URLs autorisees :
+## Configuration
 
-- `*.lagrowthmachine.com`
-- `*.preview.lgmfeatureenv7.com`
-- `localhost`
-- `127.0.0.1`
+| Setting         | Required | Description                                                       |
+| --------------- | -------- | ----------------------------------------------------------------- |
+| **LGM API Key** | Yes      | Your LaGrowthMachine API key. Stored securely in the OS keychain. |
+| **API URL**     | No       | Custom API URL. Defaults to `https://apiv2.lagrowthmachine.com`.  |
 
----
+You can update your API key at any time in **Settings > Extensions > LaGrowthMachine**.
 
-## Demarrage rapide
+## Usage Examples
 
-### Prerequis
+### Example 1: Campaign overview
 
-- Node.js >= 20
-- Docker (optionnel, pour le mode HTTP)
+**Prompt:** "Show me my running campaigns"
 
-### Installation
+**What happens:** Claude calls `list_campaigns` with status filter "running" and presents a summary table with campaign names, statuses, and key metrics.
 
-```bash
-npm install
-npm run build
-```
+**Expected output:** A formatted table of your active campaigns with their names, creation dates, and current statuses.
 
-### Mode stdio (local)
+### Example 2: Campaign performance deep-dive
 
-```bash
-LGM_MCP_TRANSPORT=stdio LGM_API_URL=http://localhost:8081 LGM_API_KEY=<api-key> npm start
-```
+**Prompt:** "What are the stats for my campaign 'VP Sales Outreach' and show me the messages in the sequence"
 
-### Mode HTTP (Docker)
+**What happens:** Claude calls `get_campaign_stats` to fetch KPIs (acceptance rate, reply rate, conversion rate) and `get_campaign_messages` to retrieve the message sequence. It then presents an analysis combining both.
 
-```bash
-docker compose up --build
-```
+**Expected output:** A performance report with key metrics followed by the full message sequence (emails, LinkedIn messages) with their content and order in the flow.
 
-Par defaut, `LGM_API_URL` pointe vers `https://api.lagrowthmachine.com`.
+### Example 3: Lead engagement analysis
 
----
+**Prompt:** "Show me the conversation history with John Smith and what actions were taken"
 
-## Configuration Docker
+**What happens:** Claude calls `get_lead_conversations` to find conversations, `get_conversation_messages` to read the full thread, and `get_lead_logs` to show all activities. It combines everything into a chronological engagement timeline.
 
-### Production (`docker-compose.yml`)
+**Expected output:** A complete engagement profile showing sent messages, received replies, connection requests, and their outcomes — with timestamps and channel information.
 
-```yaml
-services:
-  lgm-mcp-server:
-    build: .
-    ports:
-      - "3001:3001"
-    environment:
-      - NODE_ENV=production
-      - LGM_API_URL=https://api.lagrowthmachine.com
-```
+## Available Tools
 
-### Dev local (`docker-compose.override.yml`)
+| Tool                        | Type  | Description                                                               |
+| --------------------------- | ----- | ------------------------------------------------------------------------- |
+| `list_campaigns`            | Read  | List campaigns with filters (status, search) and pagination               |
+| `get_campaign_stats`        | Read  | Detailed campaign statistics (acceptance rate, reply rate, conversions)   |
+| `get_campaign_messages`     | Read  | Message templates for a campaign with content and sequence order          |
+| `get_audience`              | Read  | Audience details (name, description, size, type, import status)           |
+| `get_audience_leads`        | Read  | Leads in an audience (name, company, job title, email, LinkedIn)          |
+| `get_lead_logs`             | Read  | Activity logs for a lead (emails, LinkedIn messages, connection requests) |
+| `get_lead_conversations`    | Read  | All conversations with a lead across channels                             |
+| `get_conversation_messages` | Read  | Full message thread in a conversation                                     |
+| `save_identity_preference`  | Write | Save a preference for an identity (tone, language, style)                 |
 
-En local, l'API LGM tourne sur la machine hote. Pour que le container Docker puisse y acceder via `localhost`, il faut activer `network_mode: host`.
+## Developer Setup (Claude Code)
 
-Creer un fichier `docker-compose.override.yml` (git-ignore) :
+For internal development, you can connect the MCP server to Claude Code via HTTP or stdio.
 
-```yaml
-services:
-  lgm-mcp-server:
-    network_mode: host
-```
-
-Avec cette config, `docker compose up` merge automatiquement les deux fichiers et le container partage le reseau de la machine hote.
-
----
-
-## Ajouter le MCP dans Claude Code
-
-### Scopes disponibles
-
-| Scope             | Stockage                       | Usage                             |
-| ----------------- | ------------------------------ | --------------------------------- |
-| `--scope local`   | `~/.claude.json`               | Prive, projet courant (defaut)    |
-| `--scope project` | `.mcp.json` (racine du projet) | Partage avec l'equipe (versionne) |
-| `--scope user`    | `~/.claude.json`               | Disponible dans tous les projets  |
-
-### Local (API sur localhost)
+### Production
 
 ```bash
-# Scope projet (mcp.json a la racine du repo)
+claude mcp add --transport http --scope user LaGrowthMachine https://mcpapp.lagrowthmachine.com/mcp --header "X-LGM-API-KEY: <api-key>"
+```
+
+### Local (API on localhost)
+
+```bash
 claude mcp add --transport http --scope project LaGrowthMachineLocal http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: http://localhost:8081"
-
-# Scope user (config globale Claude)
-claude mcp add --transport http --scope user LaGrowthMachineLocal http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: http://localhost:8081"
 ```
 
 ### Feature branch
 
 ```bash
-# Scope projet
 claude mcp add --transport http --scope project LaGrowthMachineFeature http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: https://<branch>-api.preview.lgmfeatureenv7.com"
-
-# Scope user
-claude mcp add --transport http --scope user LaGrowthMachineFeature http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: https://<branch>-api.preview.lgmfeatureenv7.com"
 ```
 
-### Production
+### Stdio (without Docker)
 
 ```bash
-# Scope projet
-claude mcp add --transport http --scope project LaGrowthMachine https://mcpapp.lagrowthmachine.com/mcp --header "X-LGM-API-KEY: <api-key>"
-
-# Scope user
-claude mcp add --transport http --scope user LaGrowthMachine https://mcpapp.lagrowthmachine.com/mcp --header "X-LGM-API-KEY: <api-key>"
+claude mcp add --transport stdio --scope project LaGrowthMachineLocal node /path/to/lgm-mcp-server/dist/index.js --env LGM_MCP_TRANSPORT=stdio --env LGM_API_URL=http://localhost:8081 --env LGM_API_KEY=<api-key>
 ```
 
-### Mode stdio (sans Docker)
+### Environment variables
 
-```bash
-claude mcp add --transport stdio --scope project LaGrowthMachineLocal node /chemin/vers/lgm-mcp-server/dist/index.js --env LGM_MCP_TRANSPORT=stdio --env LGM_API_URL=http://localhost:8081 --env LGM_API_KEY=<api-key>
-```
+| Variable            | Default                             | Description                   |
+| ------------------- | ----------------------------------- | ----------------------------- |
+| `PORT`              | `3001`                              | HTTP server port              |
+| `LGM_MCP_TRANSPORT` | `http`                              | Transport: `http` or `stdio`  |
+| `LGM_API_URL`       | `https://apiv2.lagrowthmachine.com` | LGM Flow API URL              |
+| `LGM_API_KEY`       | -                                   | API key (stdio mode only)     |
 
----
+### HTTP endpoints
 
-## Outils exposes
+| Method            | Path            | Description             |
+| ----------------- | --------------- | ----------------------- |
+| `GET`             | `/health`       | Health check            |
+| `GET`             | `/health/ready` | Readiness probe         |
+| `POST/GET/DELETE` | `/mcp`          | MCP endpoint            |
 
-| Outil                       | Description                                    | Lecture/Ecriture |
-| --------------------------- | ---------------------------------------------- | ---------------- |
-| `list_campaigns`            | Lister les campagnes avec filtre et pagination | Lecture          |
-| `get_campaign_stats`        | Statistiques detaillees d'une campagne         | Lecture          |
-| `get_campaign_messages`     | Templates de messages d'une campagne           | Lecture          |
-| `get_audience`              | Details d'une audience                         | Lecture          |
-| `get_audience_leads`        | Leads d'une audience avec pagination           | Lecture          |
-| `get_lead_logs`             | Historique d'activite d'un lead                | Lecture          |
-| `get_lead_conversations`    | Conversations d'un lead (tous canaux)          | Lecture          |
-| `get_conversation_messages` | Messages d'une conversation                    | Lecture          |
-| `save_identity_preference`  | Sauvegarder une preference d'identite          | Ecriture         |
+## Privacy Policy
 
----
+This extension connects to the LaGrowthMachine API to access your campaign and lead data.
 
-## Variables d'environnement
+- **Data collected:** The extension reads campaign, audience, lead, and conversation data from your LGM account via your API key. No data is stored locally beyond the API key (secured in the OS keychain).
+- **Data usage:** Data is fetched on-demand when Claude calls a tool and is used only within your Claude conversation. It is not sent to any third party beyond Anthropic (as part of the Claude conversation).
+- **Data sharing:** Your LGM data is not shared with any third party. The extension communicates only with the LaGrowthMachine API (`api.lagrowthmachine.com`).
+- **Data retention:** No LGM data is persisted by the extension. Conversation data follows Anthropic's standard data retention policies.
+- **API key storage:** Your API key is stored securely in the operating system's keychain (macOS Keychain / Windows Credential Manager), not in plain text.
 
-| Variable            | Defaut                            | Description                     |
-| ------------------- | --------------------------------- | ------------------------------- |
-| `PORT`              | `3001`                            | Port du serveur HTTP            |
-| `LGM_MCP_TRANSPORT` | `http`                            | Transport : `http` ou `stdio`   |
-| `LGM_API_URL`       | `https://api.lagrowthmachine.com` | URL de l'API LGM Flow           |
-| `LGM_API_KEY`       | -                                 | API key (mode stdio uniquement) |
-| `NODE_ENV`          | -                                 | Environnement Node.js           |
+Full privacy policy: [https://lagrowthmachine.com/privacy-policy/](https://lagrowthmachine.com/privacy-policy/)
 
----
+## Support
 
-## Endpoints HTTP
-
-| Methode           | Path            | Description                   |
-| ----------------- | --------------- | ----------------------------- |
-| `GET`             | `/health`       | Health check                  |
-| `GET`             | `/health/ready` | Readiness probe               |
-| `POST/GET/DELETE` | `/mcp`          | Endpoint MCP (StreamableHTTP) |
+- **Help Center:** [https://help.lagrowthmachine.com](https://help.lagrowthmachine.com)
+- **Issues:** [https://github.com/lagrowthmachine/lgm-mcp-server/issues](https://github.com/lagrowthmachine/lgm-mcp-server/issues)

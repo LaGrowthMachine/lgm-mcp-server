@@ -9,7 +9,7 @@ services:
       - "3001"
     environment:
       - NODE_ENV=production
-      - LGM_API_URL=${LGM_API_URL:-https://api.lagrowthmachine.com}
+      - LGM_API_URL=${LGM_API_URL:-https://apiv2.lagrowthmachine.com}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]

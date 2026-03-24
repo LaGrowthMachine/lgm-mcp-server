@@ -1,12 +1,22 @@
 {
-  "manifest_version": "0.4",
+  "manifest_version": "0.3",
   "name": "LGM",
+  "display_name": "LaGrowthMachine",
   "version": "1.0.0",
   "description": "Connect LaGrowthMachine to Claude — manage campaigns, leads, audiences and conversations directly from AI.",
+  "long_description": "LaGrowthMachine (LGM) is a multichannel sales outreach platform. This extension gives Claude direct access to your LGM data: list campaigns, analyze performance, explore leads, read conversations, and save AI-generated preferences. No coding required — just install, enter your API key, and start asking Claude about your outreach.",
   "author": {
-    "name": "LaGrowthMachine"
+    "name": "LaGrowthMachine",
+    "url": "https://lagrowthmachine.com"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lagrowthmachine/lgm-mcp-server"
+  },
+  "homepage": "https://lagrowthmachine.com",
+  "support": "https://help.lagrowthmachine.com",
   "icon": "icon.png",
+  "license": "MIT",
   "server": {
     "type": "node",
     "entry_point": "dist/stdio.js",
@@ -24,14 +34,14 @@
     "api_key": {
       "type": "string",
       "title": "LGM API Key",
-      "description": "Your LaGrowthMachine API key (available in Settings > API)",
+      "description": "Your LaGrowthMachine API key",
       "required": true,
       "sensitive": true
     },
     "api_url": {
       "type": "string",
       "title": "API URL",
-      "description": "LGM API URL (default: https://api.lagrowthmachine.com)",
+      "description": "LGM API URL (default: https://apiv2.lagrowthmachine.com)",
       "required": false
     }
   },
@@ -72,5 +82,24 @@
       "name": "save_identity_preference",
       "description": "Save a preference for an identity to personalize AI-generated content."
     }
-  ]
+  ],
+  "keywords": [
+    "sales",
+    "outreach",
+    "campaigns",
+    "leads",
+    "prospecting",
+    "multichannel",
+    "linkedin",
+    "email",
+    "lagrowthmachine"
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.12.20",
+    "platforms": ["darwin", "win32"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "privacy_policies": ["https://lagrowthmachine.com/privacy-policy/"]
 }

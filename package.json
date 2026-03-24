@@ -9,7 +9,8 @@
     "start:stdio": "LGM_MCP_TRANSPORT=stdio node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "jest --runInBand",
-    "pack": "tsc && npx @anthropic-ai/mcpb pack && mv lgm-mcp-server.mcpb lgm-mcp.mcpb"
+    "pack": "tsc && cp manifest.json manifest.bak.json && node -e \"let m=require('./manifest.json');delete m.user_config.api_url;m.server.mcp_config.env={LGM_MCP_TRANSPORT:'stdio',LGM_API_KEY:'\\${user_config.api_key}'};require('fs').writeFileSync('manifest.json',JSON.stringify(m,null,2))\" && npx @anthropic-ai/mcpb pack && mv manifest.bak.json manifest.json && mv lgm-mcp-server.mcpb lgm-mcp.mcpb",
+    "pack:dev": "tsc && cp manifest.json manifest.bak.json && node -e \"let m=require('./manifest.json');m.name='LGM-Sandbox';m.display_name='LaGrowthMachine Sandbox';require('fs').writeFileSync('manifest.json',JSON.stringify(m,null,2))\" && npx @anthropic-ai/mcpb pack && mv manifest.bak.json manifest.json && mv lgm-mcp-server.mcpb lgm-mcp-dev.mcpb"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
