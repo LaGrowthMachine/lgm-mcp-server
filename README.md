@@ -121,7 +121,7 @@ This extension connects to the LaGrowthMachine API to access your campaign and l
 
 - **Data collected:** The extension reads campaign, audience, lead, and conversation data from your LGM account via your API key. No data is stored locally beyond the API key (secured in the OS keychain).
 - **Data usage:** Data is fetched on-demand when Claude calls a tool and is used only within your Claude conversation. It is not sent to any third party beyond Anthropic (as part of the Claude conversation).
-- **Data sharing:** Your LGM data is not shared with any third party. The extension communicates only with the LaGrowthMachine API (`api.lagrowthmachine.com`).
+- **Data sharing:** Your LGM data is not shared with any third party. The extension communicates only with the LaGrowthMachine API (`apiv2.lagrowthmachine.com`).
 - **Data retention:** No LGM data is persisted by the extension. Conversation data follows Anthropic's standard data retention policies.
 - **API key storage:** Your API key is stored securely in the operating system's keychain (macOS Keychain / Windows Credential Manager), not in plain text.
 
