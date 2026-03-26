@@ -70,7 +70,10 @@ export const registerTools = (server: McpServer) => {
           .describe("Maximum number of campaigns to return (max 25)"),
         search: z.string().optional().describe("Search campaigns by name"),
       },
-      annotations: { readOnlyHint: true },
+      annotations: {
+        title: "List Campaigns",
+        readOnlyHint: true,
+      },
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
@@ -97,7 +100,10 @@ export const registerTools = (server: McpServer) => {
           .string()
           .describe("The campaign ID (24-character hex string)"),
       },
-      annotations: { readOnlyHint: true },
+      annotations: {
+        title: "Get Campaign Statistics",
+        readOnlyHint: true,
+      },
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
@@ -137,7 +143,10 @@ export const registerTools = (server: McpServer) => {
           .default(25)
           .describe("Maximum number of leads to return (max 100)"),
       },
-      annotations: { readOnlyHint: true },
+      annotations: {
+        title: "Get Audience Leads",
+        readOnlyHint: true,
+      },
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
@@ -183,7 +192,10 @@ export const registerTools = (server: McpServer) => {
           .default(25)
           .describe("Maximum number of logs to return (max 100)"),
       },
-      annotations: { readOnlyHint: true },
+      annotations: {
+        title: "Get Lead Activity Logs",
+        readOnlyHint: true,
+      },
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
@@ -216,7 +228,10 @@ export const registerTools = (server: McpServer) => {
           .optional()
           .describe("Filter conversations by identity ID"),
       },
-      annotations: { readOnlyHint: true },
+      annotations: {
+        title: "Get Lead Conversations",
+        readOnlyHint: true,
+      },
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
@@ -249,7 +264,10 @@ export const registerTools = (server: McpServer) => {
           .string()
           .describe("The conversation ID (24-character hex string)"),
       },
-      annotations: { readOnlyHint: true },
+      annotations: {
+        title: "Get Conversation Messages",
+        readOnlyHint: true,
+      },
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
@@ -281,7 +299,10 @@ export const registerTools = (server: McpServer) => {
           .string()
           .describe("The campaign ID (24-character hex string)"),
       },
-      annotations: { readOnlyHint: true },
+      annotations: {
+        title: "Get Campaign Messages",
+        readOnlyHint: true,
+      },
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
@@ -305,13 +326,16 @@ export const registerTools = (server: McpServer) => {
     "get_audience",
     {
       description:
-        "Get detailed information about a specific audience. Returns name, description, size, type, and import status. Use audience IDs from the campaigns or list_audiences.",
+        "Get detailed information about a specific audience. Returns name, description, size, type, and import status. Use audience IDs from list_campaigns results.",
       inputSchema: {
         audienceId: z
           .string()
           .describe("The audience ID (24-character hex string)"),
       },
-      annotations: { readOnlyHint: true },
+      annotations: {
+        title: "Get Audience Details",
+        readOnlyHint: true,
+      },
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
@@ -350,7 +374,10 @@ export const registerTools = (server: McpServer) => {
           .optional()
           .describe('Optional channel scope (e.g., "linkedin", "email")'),
       },
-      annotations: { readOnlyHint: false, destructiveHint: true },
+      annotations: {
+        title: "Save Identity Preference",
+        destructiveHint: true,
+      },
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
