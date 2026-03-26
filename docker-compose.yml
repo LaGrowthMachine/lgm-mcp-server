@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3001:3001"
+      - ${SERVER_PORT-:3001}:3001
     expose:
       - "3001"
     environment:
