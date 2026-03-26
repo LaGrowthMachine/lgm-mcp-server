@@ -9,6 +9,7 @@ export const requestContext = new AsyncLocalStorage<RequestContext>();
 
 const ALLOWED_API_URL_PATTERNS = [
   /^https:\/\/([a-z0-9-]+\.)*lagrowthmachine\.com$/,
+  /^https:\/\/([a-z0-9-]+\.)*lagrowthmachine\.xyz$/,
   /^https:\/\/[a-z0-9-]+\.preview\.lgmfeatureenv7\.com$/,
   /^http:\/\/localhost(:\d+)?$/,
   /^http:\/\/127\.0\.0\.1(:\d+)?$/,

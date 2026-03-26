@@ -54,17 +54,21 @@ const startHttpServer = async () => {
         const apiKey = extractApiKey(req);
 
         if (customApiUrl && !isAllowedApiUrl(customApiUrl)) {
+          const message =
+            "Invalid X-LGM-API-URL. Must be a *.lagrowthmachine.com, *.preview.lgmfeatureenv7.com, or localhost URL.";
+          console.error(message);
           res.status(400).json({
-            error:
-              "Invalid X-LGM-API-URL. Must be a *.lagrowthmachine.com, *.preview.lgmfeatureenv7.com, or localhost URL.",
+            error: message,
           });
           return;
         }
 
         if (!apiKey) {
+          const message =
+            "Missing API key. Provide X-LGM-API-KEY header or Authorization: Bearer <key>.";
+          console.error(message);
           res.status(401).json({
-            error:
-              "Missing API key. Provide X-LGM-API-KEY header or Authorization: Bearer <key>.",
+            error: message,
           });
           return;
         }
@@ -110,6 +114,7 @@ const startHttpServer = async () => {
 
   const httpServer = app.listen(PORT, () => {
     console.log(`LGM MCP Server running on port ${PORT}`);
+    console.log(`endpoint: ${getApiUrl()}`);
   });
 
   const shutdown = () => {
