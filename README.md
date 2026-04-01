@@ -1,6 +1,8 @@
-# LaGrowthMachine — Claude Desktop Extension
+# LaGrowthMachine — MCP Server
 
-Connect [LaGrowthMachine](https://lagrowthmachine.com) to Claude Desktop. Manage your multichannel outreach campaigns, analyze performance, explore leads, and read conversations — all through natural language.
+Connect [LaGrowthMachine](https://lagrowthmachine.com) to any AI assistant that supports the [Model Context Protocol](https://modelcontextprotocol.io). Manage your multichannel outreach campaigns, analyze performance, explore leads, and read conversations — all through natural language.
+
+**Works with:** Claude Desktop, Claude Code, Claude.ai, VS Code / GitHub Copilot, Cursor, Windsurf, Cline, JetBrains IDEs, Continue, OpenAI Agents SDK, OpenAI Codex, Amazon Q, and any MCP-compatible client.
 
 ## Features
 
@@ -11,24 +13,178 @@ Connect [LaGrowthMachine](https://lagrowthmachine.com) to Claude Desktop. Manage
 - **Conversation reader** — Read full message threads across all channels
 - **AI preferences** — Save identity preferences to personalize AI-generated content
 
+## Prerequisites
+
+- **LGM API Key** (required) — get yours in [Settings > API](https://app.lagrowthmachine.com/settings/api)
+
 ## Installation
+
+### Claude Desktop
 
 1. Download the `lgm-mcp.mcpb` file
 2. Double-click to open with Claude Desktop
 3. Click **Install**
-4. Enter your LGM API key (available in [Settings > API](https://app.lagrowthmachine.com/settings/api))
+4. Enter your LGM API key
 5. Start chatting — ask Claude about your campaigns
 
-Or install from the Claude Desktop extension directory: **Settings > Extensions > Browse > "LaGrowthMachine"**.
+Or install from the extension directory: **Settings > Extensions > Browse > "LaGrowthMachine"**.
 
-## Configuration
+### Claude Code
 
-| Setting         | Required | Description                                                       |
-| --------------- | -------- | ----------------------------------------------------------------- |
-| **LGM API Key** | Yes      | Your LaGrowthMachine API key. Stored securely in the OS keychain. |
-| **API URL**     | No       | Custom API URL. Defaults to `https://apiv2.lagrowthmachine.com`.  |
+```bash
+claude mcp add --transport http --scope user LaGrowthMachine https://mcpapp.lagrowthmachine.com/mcp --header "X-LGM-API-KEY: <your-api-key>"
+```
 
-You can update your API key at any time in **Settings > Extensions > LaGrowthMachine**.
+### VS Code / GitHub Copilot
+
+Add to `.vscode/mcp.json` (project) or your user-level `mcp.json`:
+
+```json
+{
+  "servers": {
+    "lgm": {
+      "type": "http",
+      "url": "https://mcpapp.lagrowthmachine.com/mcp",
+      "headers": {
+        "X-LGM-API-KEY": "${input:lgm-api-key}"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "id": "lgm-api-key",
+      "type": "promptString",
+      "description": "Your LaGrowthMachine API key",
+      "password": true
+    }
+  ]
+}
+```
+
+### Cursor
+
+Add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
+
+```json
+{
+  "mcpServers": {
+    "lgm": {
+      "url": "https://mcpapp.lagrowthmachine.com/mcp",
+      "headers": {
+        "X-LGM-API-KEY": "<your-api-key>"
+      }
+    }
+  }
+}
+```
+
+### Windsurf
+
+Add to your Windsurf MCP config (`~/.codeium/windsurf/mcp_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "lgm": {
+      "serverUrl": "https://mcpapp.lagrowthmachine.com/mcp",
+      "headers": {
+        "X-LGM-API-KEY": "<your-api-key>"
+      }
+    }
+  }
+}
+```
+
+### Cline (VS Code)
+
+Open the Cline MCP settings panel and add:
+
+```json
+{
+  "mcpServers": {
+    "lgm": {
+      "url": "https://mcpapp.lagrowthmachine.com/mcp",
+      "headers": {
+        "X-LGM-API-KEY": "<your-api-key>"
+      }
+    }
+  }
+}
+```
+
+### JetBrains IDEs
+
+Go to **Settings > Tools > AI Assistant > MCP Servers**, click **Add (+) > As JSON** and paste:
+
+```json
+{
+  "lgm": {
+    "url": "https://mcpapp.lagrowthmachine.com/mcp",
+    "headers": {
+      "X-LGM-API-KEY": "<your-api-key>"
+    }
+  }
+}
+```
+
+### Continue
+
+Add to your Continue config (`~/.continue/config.yaml`):
+
+```yaml
+mcpServers:
+  - name: lgm
+    url: https://mcpapp.lagrowthmachine.com/mcp
+    headers:
+      X-LGM-API-KEY: <your-api-key>
+```
+
+### OpenAI Agents SDK (Python)
+
+```python
+from agents.mcp import MCPServerStreamableHttp
+
+lgm_server = MCPServerStreamableHttp(
+    name="lgm",
+    params={
+        "url": "https://mcpapp.lagrowthmachine.com/mcp",
+        "headers": {"X-LGM-API-KEY": "<your-api-key>"},
+    },
+)
+```
+
+### OpenAI Codex
+
+```bash
+codex mcp add -- --transport http --url https://mcpapp.lagrowthmachine.com/mcp --header "X-LGM-API-KEY: <your-api-key>" lgm
+```
+
+### Amazon Q CLI
+
+Add to your Amazon Q MCP config:
+
+```json
+{
+  "mcpServers": {
+    "lgm": {
+      "url": "https://mcpapp.lagrowthmachine.com/mcp",
+      "headers": {
+        "X-LGM-API-KEY": "<your-api-key>"
+      }
+    }
+  }
+}
+```
+
+### Any MCP-compatible client
+
+The server exposes a standard Streamable HTTP endpoint:
+
+```
+URL:    https://mcpapp.lagrowthmachine.com/mcp
+Auth:   X-LGM-API-KEY: <your-api-key>
+        (or Authorization: Bearer <your-api-key>)
+```
 
 ## Usage Examples
 
@@ -70,29 +226,23 @@ You can update your API key at any time in **Settings > Extensions > LaGrowthMac
 | `get_conversation_messages` | Read  | Full message thread in a conversation                                     |
 | `save_identity_preference`  | Write | Save a preference for an identity (tone, language, style)                 |
 
-## Developer Setup (Claude Code)
+## Developer Setup
 
-For internal development, you can connect the MCP server to Claude Code via HTTP or stdio.
+For LGM internal development, you can connect a local MCP server instance to Claude Code or any client.
 
-### Production
-
-```bash
-claude mcp add --transport http --scope user LaGrowthMachine https://mcpapp.lagrowthmachine.com/mcp --header "X-LGM-API-KEY: <api-key>"
-```
-
-### Local (API on localhost)
+### Claude Code — Local API
 
 ```bash
 claude mcp add --transport http --scope project LaGrowthMachineLocal http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: http://localhost:8081"
 ```
 
-### Feature branch
+### Claude Code — Feature branch
 
 ```bash
 claude mcp add --transport http --scope project LaGrowthMachineFeature http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: https://<branch>-api.preview.lgmfeatureenv7.com"
 ```
 
-### Stdio (without Docker)
+### Claude Code — Stdio (without Docker)
 
 ```bash
 claude mcp add --transport stdio --scope project LaGrowthMachineLocal node /path/to/lgm-mcp-server/dist/index.js --env LGM_MCP_TRANSPORT=stdio --env LGM_API_URL=http://localhost:8081 --env LGM_API_KEY=<api-key>
