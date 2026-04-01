@@ -1,283 +1,117 @@
-# LaGrowthMachine — MCP Server
+# La Growth Machine — B2B Outreach & Pipeline Analytics
 
-Connect [LaGrowthMachine](https://lagrowthmachine.com) to any AI assistant that supports the [Model Context Protocol](https://modelcontextprotocol.io). Manage your multichannel outreach campaigns, analyze performance, explore leads, and read conversations — all through natural language.
+Analyze LinkedIn & email outreach campaigns, track pipeline performance, and review lead conversations in Claude — for RevOps, Sales Managers, and SDR teams.
 
-**Works with:** Claude Desktop, Claude Code, Claude.ai, VS Code / GitHub Copilot, Cursor, Windsurf, Cline, JetBrains IDEs, Continue, OpenAI Agents SDK, OpenAI Codex, Amazon Q, and any MCP-compatible client.
+---
 
-## Features
+La Growth Machine connects Claude to your outbound revenue stack — giving RevOps engineers, Sales Managers, and SDR teams instant access to campaign performance, lead engagement data, and message sequences across LinkedIn and email. Stop switching between dashboards to answer "what's working?". Ask Claude instead.
 
-- **Campaign management** — List, filter, and search your outreach campaigns
-- **Performance analytics** — Get detailed stats: acceptance rate, reply rate, conversions
-- **Lead exploration** — Browse leads with full details (name, company, job title, email, LinkedIn)
-- **Activity tracking** — View engagement history: emails sent, LinkedIn messages, connection requests
-- **Conversation reader** — Read full message threads across all channels
-- **AI preferences** — Save identity preferences to personalize AI-generated content
+---
 
-## Prerequisites
+## Why connect La Growth Machine to Claude?
 
-- **LGM API Key** (required) — get yours in [Settings > API](https://app.lagrowthmachine.com/settings/api)
+Your outreach data is only useful if you can act on it. With this extension, Claude becomes your outbound analyst — surfacing what's working, what's stalling, and where to focus next.
 
-## Installation
+**Built for:**
+- **RevOps & GTM Engineers** who orchestrate the revenue stack and need fast, flexible access to campaign performance
+- **Sales Managers & Team Leads** who need visibility on team activity and pipeline contribution without digging through dashboards
+- **Sales Reps** managing live conversations and follow-ups across channels
 
-### Claude Desktop
+---
 
-1. Download the `lgm-mcp.mcpb` file
-2. Double-click to open with Claude Desktop
-3. Click **Install**
-4. Enter your LGM API key
-5. Start chatting — ask Claude about your campaigns
+## What you can do
 
-Or install from the extension directory: **Settings > Extensions > Browse > "LaGrowthMachine"**.
+**Analyze campaign performance**
+Ask Claude to compare reply rates, acceptance rates, and conversion metrics across campaigns — and get a diagnosis, not just a table.
 
-### Claude Code
+**Audit your message sequences**
+Pull the full message flow for any campaign. Ask Claude to identify weak touchpoints or suggest improvements based on sequence structure.
 
-```bash
-claude mcp add --transport http --scope user LaGrowthMachine https://mcpapp.lagrowthmachine.com/mcp --header "X-LGM-API-KEY: <your-api-key>"
-```
+**Explore leads and audiences**
+Browse leads by audience, filter by status, or deep-dive into a specific lead's profile: company, role, email, LinkedIn URL.
 
-### VS Code / GitHub Copilot
+**Read full conversation threads**
+Get the complete message history for any lead across all channels (email + LinkedIn) — with context, not just raw logs.
 
-Add to `.vscode/mcp.json` (project) or your user-level `mcp.json`:
+**Track engagement activity**
+View all actions taken on a lead: connection requests sent, messages delivered, replies received, follow-ups triggered.
 
-```json
-{
-  "servers": {
-    "lgm": {
-      "type": "http",
-      "url": "https://mcpapp.lagrowthmachine.com/mcp",
-      "headers": {
-        "X-LGM-API-KEY": "${input:lgm-api-key}"
-      }
-    }
-  },
-  "inputs": [
-    {
-      "id": "lgm-api-key",
-      "type": "promptString",
-      "description": "Your LaGrowthMachine API key",
-      "password": true
-    }
-  ]
-}
-```
+**Personalize AI-generated outreach**
+Save tone and style preferences per La Growth Machine identity, so Claude generates on-brand messages that match your voice.
 
-### Cursor
-
-Add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
-
-```json
-{
-  "mcpServers": {
-    "lgm": {
-      "url": "https://mcpapp.lagrowthmachine.com/mcp",
-      "headers": {
-        "X-LGM-API-KEY": "<your-api-key>"
-      }
-    }
-  }
-}
-```
-
-### Windsurf
-
-Add to your Windsurf MCP config (`~/.codeium/windsurf/mcp_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "lgm": {
-      "serverUrl": "https://mcpapp.lagrowthmachine.com/mcp",
-      "headers": {
-        "X-LGM-API-KEY": "<your-api-key>"
-      }
-    }
-  }
-}
-```
-
-### Cline (VS Code)
-
-Open the Cline MCP settings panel and add:
-
-```json
-{
-  "mcpServers": {
-    "lgm": {
-      "url": "https://mcpapp.lagrowthmachine.com/mcp",
-      "headers": {
-        "X-LGM-API-KEY": "<your-api-key>"
-      }
-    }
-  }
-}
-```
-
-### JetBrains IDEs
-
-Go to **Settings > Tools > AI Assistant > MCP Servers**, click **Add (+) > As JSON** and paste:
-
-```json
-{
-  "lgm": {
-    "url": "https://mcpapp.lagrowthmachine.com/mcp",
-    "headers": {
-      "X-LGM-API-KEY": "<your-api-key>"
-    }
-  }
-}
-```
-
-### Continue
-
-Add to your Continue config (`~/.continue/config.yaml`):
-
-```yaml
-mcpServers:
-  - name: lgm
-    url: https://mcpapp.lagrowthmachine.com/mcp
-    headers:
-      X-LGM-API-KEY: <your-api-key>
-```
-
-### OpenAI Agents SDK (Python)
-
-```python
-from agents.mcp import MCPServerStreamableHttp
-
-lgm_server = MCPServerStreamableHttp(
-    name="lgm",
-    params={
-        "url": "https://mcpapp.lagrowthmachine.com/mcp",
-        "headers": {"X-LGM-API-KEY": "<your-api-key>"},
-    },
-)
-```
-
-### OpenAI Codex
-
-```bash
-codex mcp add -- --transport http --url https://mcpapp.lagrowthmachine.com/mcp --header "X-LGM-API-KEY: <your-api-key>" lgm
-```
-
-### Amazon Q CLI
-
-Add to your Amazon Q MCP config:
-
-```json
-{
-  "mcpServers": {
-    "lgm": {
-      "url": "https://mcpapp.lagrowthmachine.com/mcp",
-      "headers": {
-        "X-LGM-API-KEY": "<your-api-key>"
-      }
-    }
-  }
-}
-```
-
-### Any MCP-compatible client
-
-The server exposes a standard Streamable HTTP endpoint:
-
-```
-URL:    https://mcpapp.lagrowthmachine.com/mcp
-Auth:   X-LGM-API-KEY: <your-api-key>
-        (or Authorization: Bearer <your-api-key>)
-```
+---
 
 ## Usage Examples
 
-### Example 1: Campaign overview
+### Diagnose a campaign that's underperforming
 
-**Prompt:** "Show me my running campaigns"
+**You:** "My 'VP Sales Q2' campaign has a low reply rate. Show me the message sequence and stats."
 
-**What happens:** Claude calls `list_campaigns` with status filter "running" and presents a summary table with campaign names, statuses, and key metrics.
+**Claude:** Fetches campaign KPIs (acceptance rate, reply rate, conversion) and the full message sequence. Analyzes which steps have drop-offs and flags messages that may be too generic or too long.
 
-**Expected output:** A formatted table of your active campaigns with their names, creation dates, and current statuses.
+---
 
-### Example 2: Campaign performance deep-dive
+### Get a full picture of a lead before calling them
 
-**Prompt:** "What are the stats for my campaign 'VP Sales Outreach' and show me the messages in the sequence"
+**You:** "Show me everything about John Smith at Acme Corp — conversation history, activity log, and their LinkedIn profile."
 
-**What happens:** Claude calls `get_campaign_stats` to fetch KPIs (acceptance rate, reply rate, conversion rate) and `get_campaign_messages` to retrieve the message sequence. It then presents an analysis combining both.
+**Claude:** Pulls the full engagement timeline: messages sent and received, connection status, reply content — giving you a complete pre-call brief in seconds.
 
-**Expected output:** A performance report with key metrics followed by the full message sequence (emails, LinkedIn messages) with their content and order in the flow.
+---
 
-### Example 3: Lead engagement analysis
+### Weekly team pipeline review
 
-**Prompt:** "Show me the conversation history with John Smith and what actions were taken"
+**You:** "List all running campaigns, their reply rates, and flag anything below 10% acceptance."
 
-**What happens:** Claude calls `get_lead_conversations` to find conversations, `get_conversation_messages` to read the full thread, and `get_lead_logs` to show all activities. It combines everything into a chronological engagement timeline.
+**Claude:** Generates a structured overview of active campaigns with key metrics, highlights underperformers, and surfaces which campaigns need attention.
 
-**Expected output:** A complete engagement profile showing sent messages, received replies, connection requests, and their outcomes — with timestamps and channel information.
+---
+
+### Audit your outreach sequence before launch
+
+**You:** "Show me the message flow for my 'DACH Enterprise' campaign — I want to check the timing and content before it goes live."
+
+**Claude:** Displays the full sequence with message content, channel (email vs LinkedIn), and step order — ready for a final review.
+
+---
 
 ## Available Tools
 
-| Tool                        | Type  | Description                                                               |
-| --------------------------- | ----- | ------------------------------------------------------------------------- |
-| `list_campaigns`            | Read  | List campaigns with filters (status, search) and pagination               |
-| `get_campaign_stats`        | Read  | Detailed campaign statistics (acceptance rate, reply rate, conversions)   |
-| `get_campaign_messages`     | Read  | Message templates for a campaign with content and sequence order          |
-| `get_audience`              | Read  | Audience details (name, description, size, type, import status)           |
-| `get_audience_leads`        | Read  | Leads in an audience (name, company, job title, email, LinkedIn)          |
-| `get_lead_logs`             | Read  | Activity logs for a lead (emails, LinkedIn messages, connection requests) |
-| `get_lead_conversations`    | Read  | All conversations with a lead across channels                             |
-| `get_conversation_messages` | Read  | Full message thread in a conversation                                     |
-| `save_identity_preference`  | Write | Save a preference for an identity (tone, language, style)                 |
+| Tool | Description |
+|------|-------------|
+| `list_campaigns` | List and filter campaigns by status, name, or date |
+| `get_campaign_stats` | Acceptance rate, reply rate, conversions, and more |
+| `get_campaign_messages` | Full message sequence with content and channel order |
+| `get_audience` | Audience name, size, type, and import status |
+| `get_audience_leads` | Leads list with name, company, role, email, LinkedIn |
+| `get_lead_logs` | Full activity history for a lead across all channels |
+| `get_lead_conversations` | All conversation threads with a lead |
+| `get_conversation_messages` | Complete message thread in a conversation |
+| `save_identity_preference` | Save tone/language/style for AI-generated content |
 
-## Developer Setup
+---
 
-For LGM internal development, you can connect a local MCP server instance to Claude Code or any client.
+## Setup
 
-### Claude Code — Local API
+1. Download `lgm-mcp.mcpb`
+2. Double-click to open with Claude Desktop
+3. Click **Install**
+4. Enter your LGM API key — find it in [Settings > API](https://app.lagrowthmachine.com/settings/api?utm_source=claude&utm_medium=mcp&utm_campaign=claude-store)
+5. Start asking Claude about your campaigns
 
-```bash
-claude mcp add --transport http --scope project LaGrowthMachineLocal http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: http://localhost:8081"
-```
+> Your API key is stored securely in the OS keychain (macOS Keychain / Windows Credential Manager). No La Growth Machine data is stored locally or shared with third parties.
 
-### Claude Code — Feature branch
+---
 
-```bash
-claude mcp add --transport http --scope project LaGrowthMachineFeature http://localhost:3001/mcp --header "X-LGM-API-KEY: <api-key>" --header "X-LGM-API-URL: https://<branch>-api.preview.lgmfeatureenv7.com"
-```
+## Privacy
 
-### Claude Code — Stdio (without Docker)
+This extension connects to the [La Growth Machine](https://lagrowthmachine.com?utm_source=claude&utm_medium=mcp&utm_campaign=claude-store) API using your API key. Data is fetched on-demand and used only within your Claude conversation. Nothing is stored beyond your API key (in the OS keychain). Your data is not shared with any third party.
 
-```bash
-claude mcp add --transport stdio --scope project LaGrowthMachineLocal node /path/to/lgm-mcp-server/dist/index.js --env LGM_MCP_TRANSPORT=stdio --env LGM_API_URL=http://localhost:8081 --env LGM_API_KEY=<api-key>
-```
+Full policy: [lagrowthmachine.com/privacy-policy](https://lagrowthmachine.com/privacy-policy?utm_source=claude&utm_medium=mcp&utm_campaign=claude-store)
 
-### Environment variables
-
-| Variable            | Default                             | Description                   |
-| ------------------- | ----------------------------------- | ----------------------------- |
-| `PORT`              | `3001`                              | HTTP server port              |
-| `LGM_MCP_TRANSPORT` | `http`                              | Transport: `http` or `stdio`  |
-| `LGM_API_URL`       | `https://apiv2.lagrowthmachine.com` | LGM Flow API URL              |
-| `LGM_API_KEY`       | -                                   | API key (stdio mode only)     |
-
-### HTTP endpoints
-
-| Method            | Path            | Description             |
-| ----------------- | --------------- | ----------------------- |
-| `GET`             | `/health`       | Health check            |
-| `GET`             | `/health/ready` | Readiness probe         |
-| `POST/GET/DELETE` | `/mcp`          | MCP endpoint            |
-
-## Privacy Policy
-
-This extension connects to the LaGrowthMachine API to access your campaign and lead data.
-
-- **Data collected:** The extension reads campaign, audience, lead, and conversation data from your LGM account via your API key. No data is stored locally beyond the API key (secured in the OS keychain).
-- **Data usage:** Data is fetched on-demand when Claude calls a tool and is used only within your Claude conversation. It is not sent to any third party beyond Anthropic (as part of the Claude conversation).
-- **Data sharing:** Your LGM data is not shared with any third party. The extension communicates only with the LaGrowthMachine API (`apiv2.lagrowthmachine.com`).
-- **Data retention:** No LGM data is persisted by the extension. Conversation data follows Anthropic's standard data retention policies.
-- **API key storage:** Your API key is stored securely in the operating system's keychain (macOS Keychain / Windows Credential Manager), not in plain text.
-
-Full privacy policy: [https://lagrowthmachine.com/privacy-policy/](https://lagrowthmachine.com/privacy-policy/)
+---
 
 ## Support
 
-- **Help Center:** [https://help.lagrowthmachine.com](https://help.lagrowthmachine.com)
-- **Issues:** [https://github.com/lagrowthmachine/lgm-mcp-server/issues](https://github.com/lagrowthmachine/lgm-mcp-server/issues)
+- Help Center: [help.lagrowthmachine.com](https://help.lagrowthmachine.com?utm_source=claude&utm_medium=mcp&utm_campaign=claude-store)
+- Issues: [github.com/lagrowthmachine/lgm-mcp-server/issues](https://github.com/lagrowthmachine/lgm-mcp-server/issues)
