@@ -30,16 +30,17 @@ function verifyPkce(verifier: string, challenge: string, method: string): boolea
   return verifier === challenge; // plain
 }
 
-async function validateApiKey(apiKey: string): Promise<boolean> {
+async function getApiKeyOwnerEmail(apiKey: string): Promise<string | null> {
   try {
-    const response = await axios.head(`${getApiUrl()}/flow/members`, {
+    const response = await axios.get(`${getApiUrl()}/usersv1/`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       timeout: 5_000,
       validateStatus: () => true,
     });
-    return response.status < 400;
+    const email = response.data?.user?.email;
+    return typeof email === "string" ? email : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -158,9 +159,17 @@ router.post("/token", async (req, res) => {
     return;
   }
 
-  const valid = await validateApiKey(client_secret);
-  if (!valid) {
+  const ownerEmail = await getApiKeyOwnerEmail(client_secret);
+  if (!ownerEmail) {
     res.status(401).json({ error: "invalid_client" });
+    return;
+  }
+
+  if (ownerEmail.toLowerCase() !== client_id.toLowerCase()) {
+    res.status(401).json({
+      error: "invalid_client",
+      error_description: "client_id does not match the API key owner",
+    });
     return;
   }
 
