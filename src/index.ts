@@ -68,12 +68,13 @@ const startHttpServer = async () => {
         }
 
         if (!apiKey) {
-          const message =
-            "Missing API key. Provide X-LGM-API-KEY header or Authorization: Bearer <key>.";
-          console.error(message);
-          res.status(401).json({
-            error: message,
-          });
+          const base =
+            process.env.MCP_BASE_URL || "https://mcpapp.lagrowthmachine.com";
+          res.set(
+            "WWW-Authenticate",
+            `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`,
+          );
+          res.status(401).json({ error: "unauthorized" });
           return;
         }
 

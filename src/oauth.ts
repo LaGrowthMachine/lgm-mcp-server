@@ -43,9 +43,23 @@ async function validateApiKey(apiKey: string): Promise<boolean> {
   }
 }
 
+const getBase = () =>
+  process.env.MCP_BASE_URL || "https://mcpapp.lagrowthmachine.com";
+
+// OAuth 2.0 Protected Resource Metadata (RFC 9728)
+// Claude.ai discovers this from the WWW-Authenticate header on 401 responses
+router.get("/.well-known/oauth-protected-resource", (_req, res) => {
+  const base = getBase();
+  res.json({
+    resource: `${base}/mcp`,
+    authorization_servers: [base],
+    bearer_methods_supported: ["header"],
+  });
+});
+
 // OAuth 2.0 Authorization Server Metadata (RFC 8414)
 router.get("/.well-known/oauth-authorization-server", (_req, res) => {
-  const base = process.env.MCP_BASE_URL || "https://mcp.lagrowthmachine.com";
+  const base = getBase();
   res.json({
     issuer: base,
     authorization_endpoint: `${base}/authorize`,
@@ -53,7 +67,7 @@ router.get("/.well-known/oauth-authorization-server", (_req, res) => {
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code"],
     token_endpoint_auth_methods_supported: ["client_secret_post"],
-    code_challenge_methods_supported: ["S256", "plain"],
+    code_challenge_methods_supported: ["S256"],
   });
 });
 
