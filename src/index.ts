@@ -7,6 +7,7 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
 import { createMcpServer } from "./server";
 import { requestContext, isAllowedApiUrl, getApiUrl } from "./requestContext";
+import oauthRouter from "./oauth";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const TRANSPORT = process.env.LGM_MCP_TRANSPORT || "http";
@@ -15,6 +16,9 @@ const startHttpServer = async () => {
   const app = express();
 
   app.use(express.json());
+  app.use(express.urlencoded({ extended: false }));
+
+  app.use(oauthRouter);
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", version: "1.0.0" });
