@@ -30,25 +30,19 @@ function verifyPkce(verifier: string, challenge: string, method: string): boolea
   return verifier === challenge; // plain
 }
 
-async function getApiKeyOwnerEmail(apiKey: string): Promise<string | null> {
-  const url = `${getApiUrl()}/usersv1/`;
+async function validateApiKey(apiKey: string): Promise<boolean> {
+  const url = `${getApiUrl()}/flow/members`;
   try {
-    const response = await axios.get(url, {
+    const response = await axios.head(url, {
       headers: { Authorization: `Bearer ${apiKey}` },
       timeout: 5_000,
       validateStatus: () => true,
     });
-    console.error(`[OAuth] GET ${url} → ${response.status}`);
-    if (response.status !== 200) {
-      console.error(`[OAuth] /usersv1/ response body:`, JSON.stringify(response.data));
-      return null;
-    }
-    const email = response.data?.user?.email;
-    console.error(`[OAuth] /usersv1/ owner email: ${email ?? "(not found)"}`);
-    return typeof email === "string" ? email : null;
+    console.error(`[OAuth] HEAD ${url} → ${response.status}`);
+    return response.status < 400;
   } catch (err) {
-    console.error(`[OAuth] /usersv1/ request failed:`, err);
-    return null;
+    console.error(`[OAuth] /flow/members request failed:`, err);
+    return false;
   }
 }
 
@@ -173,20 +167,14 @@ router.post("/token", async (req, res) => {
     return;
   }
 
-  const ownerEmail = await getApiKeyOwnerEmail(client_secret);
-  if (!ownerEmail) {
-    console.error(`[OAuth] /token could not resolve owner email`);
+  const valid = await validateApiKey(client_secret);
+  if (!valid) {
+    console.error(`[OAuth] /token invalid API key for client_id=${client_id}`);
     res.status(401).json({ error: "invalid_client", error_description: "invalid API key" });
     return;
   }
 
-  if (ownerEmail.toLowerCase() !== client_id.toLowerCase()) {
-    console.error(`[OAuth] /token email mismatch: owner=${ownerEmail} client_id=${client_id}`);
-    res.status(401).json({ error: "invalid_client", error_description: "client_id does not match the API key owner" });
-    return;
-  }
-
-  console.error(`[OAuth] /token success for ${ownerEmail}`);
+  console.error(`[OAuth] /token success for ${client_id}`);
   res.json({
     access_token: client_secret,
     token_type: "Bearer",
