@@ -141,6 +141,23 @@ All LGM Skills are available at:
 4. Enter your LGM API key — find it in [Settings > API](https://app.lagrowthmachine.com/settings/api?utm_source=claude&utm_medium=mcp&utm_campaign=claude-store)
 5. Start chatting with your campaigns
 
+### Claude.ai (web connector)
+
+1. Go to [claude.ai](https://claude.ai) → **Settings** → **Connectors** → **Add custom connector**
+2. Enter the following URL:
+   ```
+   https://mcpapp.lagrowthmachine.com/mcp
+   ```
+3. Open **Advanced parameters** and fill in the OAuth credentials:
+
+   | Field | Value |
+   |-------|-------|
+   | **OAuth Client ID** | Your LGM account email |
+   | **OAuth Client Secret** | Your LGM API key — find it in [Settings > API](https://app.lagrowthmachine.com/settings/integrations/api) |
+
+4. Click **Save**.
+5. Back on the Connectors list, click **Connect** on the La Growth Machine line — Claude.ai will go through the authentication flow and the connector will be active.
+
 ### Other MCP clients (Claude Code, Cursor, etc.)
 
 ```bash
