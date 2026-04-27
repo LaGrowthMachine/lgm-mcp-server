@@ -30,19 +30,27 @@ function verifyPkce(verifier: string, challenge: string, method: string): boolea
   return verifier === challenge; // plain
 }
 
-async function validateApiKey(apiKey: string): Promise<boolean> {
-  const url = `${getApiUrl()}/flow/members`;
+type ApiKeyCheckResult =
+  | { ok: true }
+  | { ok: false; reason: 'invalid_key' | 'service_unavailable' | 'email_mismatch' | 'bad_request' };
+
+async function validateApiKey(apiKey: string, clientId: string): Promise<ApiKeyCheckResult> {
+  const url = `${getApiUrl()}/flow/check-email?email=${encodeURIComponent(clientId)}`;
   try {
-    const response = await axios.head(url, {
+    const response = await axios.get(url, {
       headers: { Authorization: `Bearer ${apiKey}` },
       timeout: 5_000,
       validateStatus: () => true,
     });
-    console.error(`[OAuth] HEAD ${url} → ${response.status}`);
-    return response.status < 400;
+    console.error(`[OAuth] GET /flow/check-email → ${response.status}`);
+    if (response.status >= 500) return { ok: false, reason: 'service_unavailable' };
+    if (response.status === 400) return { ok: false, reason: 'bad_request' };
+    if (response.status >= 401) return { ok: false, reason: 'invalid_key' };
+    if (response.data?.valid !== true) return { ok: false, reason: 'email_mismatch' };
+    return { ok: true };
   } catch (err) {
-    console.error(`[OAuth] /flow/members request failed:`, err);
-    return false;
+    console.error(`[OAuth] /flow/check-email request failed:`, err);
+    return { ok: false, reason: 'service_unavailable' };
   }
 }
 
@@ -141,7 +149,7 @@ router.post("/token", async (req, res) => {
     res.status(400).json({ error: "invalid_grant", error_description: "code expired" });
     return;
   }
-  if (stored.clientId !== client_id) {
+  if (stored.clientId.toLowerCase().trim() !== client_id.toLowerCase().trim()) {
     console.error(`[OAuth] /token invalid_grant: client_id mismatch stored=${stored.clientId} received=${client_id}`);
     res.status(400).json({ error: "invalid_grant", error_description: "client_id mismatch" });
     return;
@@ -167,10 +175,25 @@ router.post("/token", async (req, res) => {
     return;
   }
 
-  const valid = await validateApiKey(client_secret);
-  if (!valid) {
+  const check = await validateApiKey(client_secret, client_id);
+  if (!check.ok) {
+    if (check.reason === 'service_unavailable') {
+      console.error(`[OAuth] /token service unavailable for client_id=${client_id}`);
+      res.status(503).json({ error: 'server_error', error_description: 'Authentication service temporarily unavailable. Please try again in a few moments.' });
+      return;
+    }
+    if (check.reason === 'bad_request') {
+      console.error(`[OAuth] /token bad email format for client_id=${client_id}`);
+      res.status(400).json({ error: 'invalid_request', error_description: "Format d'email invalide. Renseignez une adresse email valide." });
+      return;
+    }
+    if (check.reason === 'email_mismatch') {
+      console.error(`[OAuth] /token email mismatch for client_id=${client_id}`);
+      res.status(401).json({ error: 'invalid_client', error_description: "Cet email ne correspond pas à la clé API renseignée. Vérifiez l'email associé à votre clé API LGM." });
+      return;
+    }
     console.error(`[OAuth] /token invalid API key for client_id=${client_id}`);
-    res.status(401).json({ error: "invalid_client", error_description: "invalid API key" });
+    res.status(401).json({ error: 'invalid_client', error_description: 'Invalid API key. Check your LGM API key in your account settings.' });
     return;
   }
 
