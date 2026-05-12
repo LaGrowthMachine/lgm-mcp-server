@@ -523,10 +523,11 @@ export const registerTools = (server: McpServer) => {
         .update(params.brief)
         .digest("hex")
         .slice(0, 16);
-      let staffEmail: string | undefined;
+      // ACL gate — currently a POC passthrough (cf. acl.ts header).
+      // Kept inline so swapping to a real check (e.g. domain enforcement)
+      // is a one-symbol edit, not a refactor.
       try {
-        const { email } = await assertLgmStaff(apiKey);
-        staffEmail = email;
+        await assertLgmStaff(apiKey);
         const result = await runDbExplorerAgent(params.brief);
         // queriesPreview: already masked + sliced to 80 chars per QueryRecord.expr.
         const queriesPreview = JSON.stringify(
@@ -550,7 +551,6 @@ export const registerTools = (server: McpServer) => {
           toolName: "explore_db",
           briefHash,
           reason,
-          ...(staffEmail ? { staffEmail } : {}),
         }).catch(() => undefined);
         // Translate Mongo connect failures into a stable user-facing message
         // (cf. spec §4.4 "Mongo unreachable → Database unreachable.").
