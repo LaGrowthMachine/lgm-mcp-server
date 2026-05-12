@@ -6,8 +6,8 @@ let client: Anthropic | null = null;
 
 const getClient = (): Anthropic => {
   if (!client) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY env var is not set");
+    const apiKey = process.env.REPLY_MANAGER_API_KEY;
+    if (!apiKey) throw new Error("REPLY_MANAGER_API_KEY env var is not set");
     client = new Anthropic({ apiKey });
   }
   return client;
