@@ -55,6 +55,11 @@ beforeEach(() => {
   __resetClientForTests();
   messagesCreate.mockReset();
   process.env.REPLY_MANAGER_API_KEY = "test-key";
+  jest.spyOn(console, "error").mockImplementation(() => undefined);
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 describe("agentLoop", () => {
@@ -69,11 +74,11 @@ describe("agentLoop", () => {
 
     const result = await runDbExplorerAgent("how many users?");
     expect(result.answer).toBe("There are 42 users.");
-    expect(result.queries).toHaveLength(1);
-    expect(result.queries[0].ok).toBe(true);
-    expect(result.stats.queryCount).toBe(1);
-    expect(result.stats.failedQueries).toBe(0);
-    expect(result.stats.loopIterations).toBe(2);
+    expect(result).not.toHaveProperty("queries");
+    expect(result).not.toHaveProperty("stats");
+    expect(result.telemetry.queryCount).toBe(1);
+    expect(result.telemetry.failedQueries).toBe(0);
+    expect(result.telemetry.loopIterations).toBe(2);
   });
 
   it("invalid query → reformulated → success", async () => {
@@ -87,10 +92,14 @@ describe("agentLoop", () => {
       .mockResolvedValueOnce(mkResp("end_turn", [text("Got it: 42.")]));
 
     const result = await runDbExplorerAgent("count please");
-    expect(result.queries).toHaveLength(2);
-    expect(result.queries[0].ok).toBe(false);
-    expect(result.queries[1].ok).toBe(true);
-    expect(result.stats.failedQueries).toBe(1);
+    expect(result.telemetry.queryCount).toBe(2);
+    expect(result.telemetry.failedQueries).toBe(1);
+    // First tool_result (after invalid insertOne) carries is_error=true.
+    const secondCall = messagesCreate.mock.calls[1][0];
+    expect(secondCall.messages[2].content[0].is_error).toBe(true);
+    // Second tool_result (after valid countDocuments) carries is_error=false.
+    const thirdCall = messagesCreate.mock.calls[2][0];
+    expect(thirdCall.messages[4].content[0].is_error).toBe(false);
   });
 
   it("MAX_ITERATIONS exceeded", async () => {
@@ -130,7 +139,7 @@ describe("agentLoop", () => {
       .mockResolvedValueOnce(mkResp("end_turn", [text("Both ran.")]));
 
     const result = await runDbExplorerAgent("two counts");
-    expect(result.queries).toHaveLength(2);
+    expect(result.telemetry.queryCount).toBe(2);
 
     // Inspect the messages passed to the 2nd call to confirm shape.
     const secondCallArgs = messagesCreate.mock.calls[1][0];
@@ -165,6 +174,10 @@ describe("agentLoop", () => {
 
     const result = await runDbExplorerAgent("brief");
     expect(result.answer).toBe("Adjusted.");
+    // Malformed input counts as a failed query in telemetry (else operators
+    // can't see the model fumbling).
+    expect(result.telemetry.queryCount).toBe(1);
+    expect(result.telemetry.failedQueries).toBe(1);
     const secondCall = messagesCreate.mock.calls[1][0];
     const toolResult = secondCall.messages[2].content[0];
     expect(toolResult.is_error).toBe(true);
@@ -203,15 +216,15 @@ describe("agentLoop", () => {
     await expect(runDbExplorerAgent("brief")).rejects.toThrow(/refused to act/);
   });
 
-  it("end_turn with queries>0 but empty answer → synthesizes a narrative-less message", async () => {
+  it("end_turn with queries>0 but empty answer → throws 'no narrative'", async () => {
     messagesCreate
       .mockResolvedValueOnce(
         mkResp("tool_use", [toolUse("t1", "db.users.countDocuments({})")]),
       )
       .mockResolvedValueOnce(mkResp("end_turn", [text("")]));
-    const result = await runDbExplorerAgent("count");
-    expect(result.queries).toHaveLength(1);
-    expect(result.answer).toMatch(/no narrative/);
+    await expect(runDbExplorerAgent("count")).rejects.toThrow(
+      /Agent returned no narrative\./,
+    );
   });
 
   it("caps tool_use blocks per iteration", async () => {

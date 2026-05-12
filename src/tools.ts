@@ -35,12 +35,6 @@ const formatTextContent = (
   };
 };
 
-const formatJsonContent = (
-  data: unknown,
-): { content: Array<{ type: "text"; text: string }> } => ({
-  content: [{ type: "text" as const, text: JSON.stringify(data) }],
-});
-
 const handleToolError = (
   error: unknown,
 ): { content: Array<{ type: "text"; text: string }>; isError: true } => {
@@ -504,7 +498,7 @@ export const registerTools = (server: McpServer) => {
     "explore_db",
     {
       description:
-        "Explore the LGM MongoDB with a natural-language brief. Admin only (@lagrowthmachine.com). Server-side Anthropic agent runs read-only queries via a validated AST proxy and returns a NL answer plus the executed queries and stats.",
+        "Explore the LGM MongoDB with a natural-language brief. Admin only (@lagrowthmachine.com). Server-side Anthropic agent runs read-only queries via a validated AST proxy and returns a natural-language answer (semantic only — no schema or query dumps unless the brief asks).",
       inputSchema: {
         brief: z
           .string()
@@ -535,22 +529,19 @@ export const registerTools = (server: McpServer) => {
       try {
         await assertLgmStaff(apiKey);
         const result = await runDbExplorerAgent(params.brief);
-        // queriesPreview: already masked + sliced to 80 chars per QueryRecord.expr.
-        const queriesPreview = JSON.stringify(
-          result.queries.slice(0, 5).map((q) => q.expr),
-        );
         await trackMcpEvent(apiKey, "mcp_tool_called", {
           toolName: "explore_db",
           promptVersion: DB_EXPLORER_PROMPT_VERSION,
           briefHash,
           briefLength: String(params.brief.length),
-          queryCount: String(result.stats.queryCount),
-          failedQueries: String(result.stats.failedQueries),
-          loopIterations: String(result.stats.loopIterations),
-          tokensUsed: String(result.stats.tokensUsed),
-          queriesPreview,
+          queryCount: String(result.telemetry.queryCount),
+          failedQueries: String(result.telemetry.failedQueries),
+          loopIterations: String(result.telemetry.loopIterations),
+          tokensUsed: String(result.telemetry.tokensUsed),
         });
-        return formatJsonContent(result);
+        return {
+          content: [{ type: "text" as const, text: result.answer }],
+        };
       } catch (error) {
         const reason = error instanceof Error ? error.message : "unknown";
         trackMcpEvent(apiKey, "mcp_tool_failed", {
