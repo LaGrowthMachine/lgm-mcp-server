@@ -62,29 +62,42 @@ export interface FormattedConversation {
   lastIsLead: boolean;
 }
 
+const extractMessagesArray = (raw: unknown): RawMessage[] => {
+  if (Array.isArray(raw)) return raw as RawMessage[];
+  const r = raw as Record<string, unknown> | undefined;
+  if (Array.isArray(r?.data)) return r.data as RawMessage[];
+  if (Array.isArray(r?.messages)) return r.messages as RawMessage[];
+  if (Array.isArray(r?.items)) return r.items as RawMessage[];
+  return [];
+};
+
+const isSystemMessage = (m: RawMessage): boolean => {
+  if (typeof m.status === "string" && m.status.toUpperCase() === "INFO") return true;
+  if (typeof m.channel === "string") {
+    const c = m.channel.toUpperCase();
+    if (c === "LGM" || c === "AUTO_QUALIFY") return true;
+  }
+  return false;
+};
+
 export const formatConversationForClassifier = (
   raw: unknown,
 ): FormattedConversation => {
-  const messages: RawMessage[] = Array.isArray(raw)
-    ? (raw as RawMessage[])
-    : Array.isArray((raw as { messages?: unknown })?.messages)
-      ? ((raw as { messages: RawMessage[] }).messages)
-      : [];
+  const messages = extractMessagesArray(raw).filter((m) => !isSystemMessage(m));
 
   const sorted = [...messages].sort(
     (a, b) => pickTimestamp(a) - pickTimestamp(b),
   );
 
   const lines: string[] = [];
+  let lastIsLead = false;
   for (const m of sorted) {
     const text = pickText(m);
     if (!text) continue;
-    const role = isFromLead(m) ? "LEAD" : "SENDER";
-    lines.push(`${role}: ${text}`);
+    const fromLead = isFromLead(m);
+    lines.push(`${fromLead ? "LEAD" : "SENDER"}: ${text}`);
+    lastIsLead = fromLead;
   }
-
-  const lastIsLead =
-    sorted.length > 0 ? isFromLead(sorted[sorted.length - 1]) : false;
 
   return {
     text: lines.join("\n\n"),
