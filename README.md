@@ -128,6 +128,7 @@ All LGM Skills are available at:
 | `get_lead_conversations` | All conversation threads with a lead |
 | `get_conversation_messages` | Complete message thread in a conversation |
 | `save_identity_preference` | Save tone/language/style for AI-generated content |
+| `explore_db` | Admin-only: natural-language MongoDB exploration via server-side agent |
 
 ---
 

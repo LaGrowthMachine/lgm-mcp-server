@@ -13,6 +13,9 @@ import {
 } from "./prompts/conversationClassifier";
 import { inferStructured } from "./inference";
 import { formatConversationForClassifier } from "./conversationFormatter";
+import { assertLgmStaff } from "./acl";
+import { runDbExplorerAgent } from "./agents/dbExplorer/agentLoop";
+import { DB_EXPLORER_PROMPT_VERSION } from "./agents/dbExplorer/prompt";
 
 const resolveApiKey = (extra: { authInfo?: { token?: string } }): string => {
   return getApiKey() || extra?.authInfo?.token || "";
@@ -485,6 +488,82 @@ export const registerTools = (server: McpServer) => {
           classification,
         });
       } catch (error) {
+        return handleToolError(error);
+      }
+    },
+  );
+
+  // Tool 11: explore_db (admin-only — server-side Anthropic agent over MongoDB)
+  server.registerTool(
+    "explore_db",
+    {
+      description:
+        "Explore the LGM MongoDB with a natural-language brief. Admin only (@lagrowthmachine.com). Server-side Anthropic agent runs read-only queries via a validated AST proxy and returns a NL answer plus the executed queries and stats.",
+      inputSchema: {
+        brief: z
+          .string()
+          .min(10)
+          .max(5_000)
+          .refine((s) => s.trim().length >= 10, {
+            message: "Brief is whitespace-only or too short.",
+          })
+          .describe(
+            "Question or exploration task in natural language (10–5000 chars).",
+          ),
+      },
+      annotations: {
+        title: "Explore Database (admin)",
+        readOnlyHint: true,
+      },
+    },
+    async (params, extra) => {
+      const apiKey = resolveApiKey(extra);
+      const briefHash = crypto
+        .createHash("sha256")
+        .update(params.brief)
+        .digest("hex")
+        .slice(0, 16);
+      let staffEmail: string | undefined;
+      try {
+        const { email } = await assertLgmStaff(apiKey);
+        staffEmail = email;
+        const result = await runDbExplorerAgent(params.brief);
+        // queriesPreview: already masked + sliced to 80 chars per QueryRecord.expr.
+        const queriesPreview = JSON.stringify(
+          result.queries.slice(0, 5).map((q) => q.expr),
+        );
+        await trackMcpEvent(apiKey, "mcp_tool_called", {
+          toolName: "explore_db",
+          promptVersion: DB_EXPLORER_PROMPT_VERSION,
+          briefHash,
+          briefLength: String(params.brief.length),
+          queryCount: String(result.stats.queryCount),
+          failedQueries: String(result.stats.failedQueries),
+          loopIterations: String(result.stats.loopIterations),
+          tokensUsed: String(result.stats.tokensUsed),
+          queriesPreview,
+        });
+        return formatTextContent("DB Exploration", result);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "unknown";
+        trackMcpEvent(apiKey, "mcp_tool_failed", {
+          toolName: "explore_db",
+          briefHash,
+          reason,
+          ...(staffEmail ? { staffEmail } : {}),
+        }).catch(() => undefined);
+        // Translate Mongo connect failures into a stable user-facing message
+        // (cf. spec §4.4 "Mongo unreachable → Database unreachable.").
+        if (
+          error instanceof Error &&
+          (error.name === "MongoServerSelectionError" ||
+            error.name === "MongoNetworkError" ||
+            /ECONNREFUSED|ETIMEDOUT|ENOTFOUND/.test(error.message))
+        ) {
+          return handleToolError(
+            new McpFlowError("Database unreachable.", 503),
+          );
+        }
         return handleToolError(error);
       }
     },
