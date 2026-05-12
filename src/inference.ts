@@ -19,22 +19,29 @@ export interface ClassifyJsonArgs {
   maxTokens?: number;
 }
 
+const extractJson = (text: string): string => {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) return fenced[1].trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start !== -1 && end > start) return trimmed.slice(start, end + 1);
+  return trimmed;
+};
+
 export const classifyToJson = async <T>(args: ClassifyJsonArgs): Promise<T> => {
   const response = await getClient().messages.create({
     model: DEFAULT_MODEL,
     max_tokens: args.maxTokens ?? 2000,
     system: args.systemPrompt,
-    messages: [
-      { role: "user", content: args.userMessage },
-      { role: "assistant", content: "{" },
-    ],
+    messages: [{ role: "user", content: args.userMessage }],
   });
 
   const block = response.content[0];
   if (!block || block.type !== "text") {
     throw new Error("Inference returned no text content");
   }
-  const jsonText = "{" + block.text;
+  const jsonText = extractJson(block.text);
   try {
     return JSON.parse(jsonText) as T;
   } catch (err) {
