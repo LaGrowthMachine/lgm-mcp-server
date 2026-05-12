@@ -14,6 +14,7 @@
     "pack:dev": "tsc && cp manifest.json manifest.bak.json && node -e \"let m=require('./manifest.json');m.name='LGM-Sandbox';m.display_name='LaGrowthMachine Sandbox';require('fs').writeFileSync('manifest.json',JSON.stringify(m,null,2))\" && npx @anthropic-ai/mcpb pack && mv manifest.bak.json manifest.json && mv lgm-mcp-server.mcpb lgm-mcp-dev.mcpb"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.1",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "axios": "^1.13.6",
     "express": "^4.18.2"

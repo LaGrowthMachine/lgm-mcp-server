@@ -1,8 +1,15 @@
+import crypto from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { callFlow, McpFlowError } from "./callFlow";
 import { trackMcpEvent } from "./tracking";
 import { getApiKey } from "./requestContext";
+import {
+  buildClassifierSystemPrompt,
+  CONVERSATION_CLASSIFIER_VERSION,
+} from "./prompts/conversationClassifier";
+import { classifyToJson } from "./inference";
+import { formatConversationForClassifier } from "./conversationFormatter";
 
 const resolveApiKey = (extra: { authInfo?: { token?: string } }): string => {
   return getApiKey() || extra?.authInfo?.token || "";
@@ -397,6 +404,73 @@ export const registerTools = (server: McpServer) => {
           toolName: "save_identity_preference",
         });
         return formatTextContent("Preference Saved", data);
+      } catch (error) {
+        return handleToolError(error);
+      }
+    },
+  );
+
+  // Tool 10: analyze_conversation (Tier 2 — server-side inference)
+  server.registerTool(
+    "analyze_conversation",
+    {
+      description:
+        "Classify the last lead message in a conversation. Returns structured JSON with 5-label certainty evaluations, suggested label + sub-label, and 8 binary signals. Useful for detecting recoverable B2B prospect conversations. Server-side inference — billed to LGM.",
+      inputSchema: {
+        conversationId: z
+          .string()
+          .describe(
+            "The conversation ID (24-character hex string) — get it from get_lead_conversations.",
+          ),
+      },
+      annotations: {
+        title: "Analyze Conversation",
+        readOnlyHint: true,
+      },
+    },
+    async (params, extra) => {
+      const apiKey = resolveApiKey(extra);
+      try {
+        const messages = await callFlow(
+          apiKey,
+          `/conversations/${params.conversationId}/messages`,
+        );
+
+        const formatted = formatConversationForClassifier(messages);
+        if (formatted.messageCount === 0) {
+          throw new McpFlowError(
+            "Conversation has no readable messages.",
+            404,
+          );
+        }
+        if (!formatted.lastIsLead) {
+          return formatTextContent("Analysis Skipped", {
+            reason:
+              "Last message is from the sender, not the lead. Nothing to classify.",
+            messageCount: formatted.messageCount,
+          });
+        }
+
+        const delimiter = crypto.randomBytes(8).toString("hex");
+        const systemPrompt = buildClassifierSystemPrompt(delimiter);
+        const userMessage = `<CONVERSATION_${delimiter}>\n${formatted.text}\n</CONVERSATION_${delimiter}>`;
+
+        const classification = await classifyToJson<Record<string, unknown>>({
+          systemPrompt,
+          userMessage,
+        });
+
+        await trackMcpEvent(apiKey, "mcp_tool_called", {
+          toolName: "analyze_conversation",
+          promptVersion: CONVERSATION_CLASSIFIER_VERSION,
+        });
+
+        return formatTextContent("Conversation Analysis", {
+          conversationId: params.conversationId,
+          promptVersion: CONVERSATION_CLASSIFIER_VERSION,
+          messageCount: formatted.messageCount,
+          classification,
+        });
       } catch (error) {
         return handleToolError(error);
       }
