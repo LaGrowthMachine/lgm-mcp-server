@@ -10,10 +10,10 @@ import {
   CLASSIFIER_TOOL_NAME,
   CLASSIFIER_TOOL_DESCRIPTION,
   CLASSIFIER_TOOL_SCHEMA,
-} from "./prompts/conversationClassifier";
-import { inferStructured } from "./inference";
-import { formatConversationForClassifier } from "./conversationFormatter";
-import { assertLgmStaff } from "./acl";
+} from "./agents/conversationAnalyzer/conversationClassifier";
+import { inferStructured } from "./agents/conversationAnalyzer/inference";
+import { formatConversationForClassifier } from "./agents/conversationAnalyzer/conversationFormatter";
+import { assertLgmStaff } from "./agents/dbExplorer/acl";
 import { runDbExplorerAgent } from "./agents/dbExplorer/agentLoop";
 import { DB_EXPLORER_PROMPT_VERSION } from "./agents/dbExplorer/prompt";
 

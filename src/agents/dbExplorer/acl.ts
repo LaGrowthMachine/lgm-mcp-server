@@ -11,7 +11,7 @@
 // populated at OAuth /token success, or (c) a staff apikey allowlist via env.
 // Cf. deferred-work.md D2.
 
-import { McpFlowError } from "./callFlow";
+import { McpFlowError } from "../../callFlow";
 
 export interface StaffIdentity {
   email: string;
