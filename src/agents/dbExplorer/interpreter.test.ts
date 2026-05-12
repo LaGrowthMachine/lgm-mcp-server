@@ -33,7 +33,7 @@ const mockDb = (coll: ReturnType<typeof mockCollection>): Db =>
 describe("interpreter — happy paths", () => {
   it("find returns array", async () => {
     const coll = mockCollection();
-    const v = validate("db.users.find({a: 1})");
+    const v = validate("db.users.find({a: 1}).limit(5)");
     const r = await runValidatedQuery(mockDb(coll), v);
     expect(r.ok).toBe(true);
     expect(coll.find).toHaveBeenCalled();
@@ -53,17 +53,6 @@ describe("interpreter — happy paths", () => {
     const r = await runValidatedQuery(mockDb(coll), v);
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.output).toBe(5);
-  });
-
-  it("auto-injects .limit(20) on find without explicit limit", async () => {
-    const cursor = {
-      limit: jest.fn().mockReturnThis(),
-      toArray: jest.fn().mockResolvedValue([]),
-    };
-    const coll = mockCollection({ find: jest.fn().mockReturnValue(cursor) });
-    const v = validate("db.users.find({})");
-    await runValidatedQuery(mockDb(coll), v);
-    expect(cursor.limit).toHaveBeenCalledWith(20);
   });
 
   it("clamps .limit(1000) to 50", async () => {
@@ -106,7 +95,7 @@ describe("interpreter — happy paths", () => {
       toArray: jest.fn().mockResolvedValue([]),
     };
     const coll = mockCollection({ find: jest.fn().mockReturnValue(cursor) });
-    const v = validate("db.users.find({}).maxTimeMS(60000)");
+    const v = validate("db.users.find({}).maxTimeMS(60000).limit(5)");
     await runValidatedQuery(mockDb(coll), v);
     expect(cursor.maxTimeMS).toHaveBeenCalledWith(10_000);
   });
@@ -140,7 +129,7 @@ describe("interpreter — BSON helpers", () => {
   it("rejects ReDoS-sized regex literal", async () => {
     const coll = mockCollection();
     const longPattern = "a".repeat(201);
-    const v = validate(`db.users.find({n: RegExp("${longPattern}", "i")})`);
+    const v = validate(`db.users.find({n: RegExp("${longPattern}", "i")}).limit(5)`);
     const r = await runValidatedQuery(mockDb(coll), v);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/anti-ReDoS/);
@@ -148,7 +137,7 @@ describe("interpreter — BSON helpers", () => {
 
   it("rejects RegExp with disallowed flag (g)", async () => {
     const coll = mockCollection();
-    const v = validate(`db.users.find({n: RegExp("a", "g")})`);
+    const v = validate(`db.users.find({n: RegExp("a", "g")}).limit(5)`);
     const r = await runValidatedQuery(mockDb(coll), v);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/flags/i);

@@ -35,6 +35,12 @@ const formatTextContent = (
   };
 };
 
+const formatJsonContent = (
+  data: unknown,
+): { content: Array<{ type: "text"; text: string }> } => ({
+  content: [{ type: "text" as const, text: JSON.stringify(data) }],
+});
+
 const handleToolError = (
   error: unknown,
 ): { content: Array<{ type: "text"; text: string }>; isError: true } => {
@@ -544,7 +550,7 @@ export const registerTools = (server: McpServer) => {
           tokensUsed: String(result.stats.tokensUsed),
           queriesPreview,
         });
-        return formatTextContent("DB Exploration", result);
+        return formatJsonContent(result);
       } catch (error) {
         const reason = error instanceof Error ? error.message : "unknown";
         trackMcpEvent(apiKey, "mcp_tool_failed", {

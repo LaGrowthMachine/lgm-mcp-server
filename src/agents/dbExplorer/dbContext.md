@@ -6,6 +6,20 @@
 
 ---
 
+## ⚡ Checklist avant CHAQUE query
+
+- [ ] Tenant filter (`userId`/`identityId`/`memberId`) en clé top-level du filtre / 1ᵉʳ `$match`
+- [ ] `deleted: false` si collection soft-deletée
+- [ ] `.project({...})` sur leads / inbox*
+- [ ] `.limit(N≤50)` explicite sur find (auto-injection = filet, pas excuse)
+- [ ] aggregate : `$match` indexé en stage 1, `$limit` avant `$group`/`$sort` lourd
+- [ ] Champ(s) filtré(s) couvert(s) par un index (cf section Indexes ci-dessous)
+- [ ] Aucun `$lookup` / `$where` / regex non ancrée
+
+Si une case n'est pas cochable → reformule ou refuse.
+
+---
+
 ## Règles pour l'agent
 
 - **Read-only** enforced structurellement par le validator AST côté serveur — toute tentative de mutation (`insert*`, `update*`, `delete*`, `drop*`, `bulkWrite`, `eval`, `runCommand`, etc.) est rejetée avant exécution. Pas de bypass.

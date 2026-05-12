@@ -7,6 +7,10 @@
 //      getIndexes/stats/findOne
 //   5. ValidationResult.argsAst exposé : AST racine des args, consommable
 //      par l'interpréteur sans re-parse (anti-TOCTOU)
+//   6. Tenant filter obligatoire sur TENANT_REQUIRED_COLLECTIONS
+//   7. .limit() explicite obligatoire sur find
+//   8. Projection obligatoire sur FAT_COLLECTIONS (find/findOne)
+//   9. Cap aggregate pipeline à MAX_AGG_STAGES
 
 import { parse } from "acorn";
 
@@ -64,6 +68,20 @@ const NO_LIMIT_OPS = new Set([
   "stats",
   "findOne",
 ]);
+
+// PATCH 6: collections requiring a tenant filter at top level.
+const TENANT_REQUIRED_COLLECTIONS = new Set([
+  "leads", "campaigns", "audiences", "inboxConversations", "inboxMessages",
+  "actions", "identities", "logs", "templates", "sequences",
+  "audienceStats", "campaignLeadsStats", "campaignstats", "leadStats",
+]);
+const TENANT_KEYS = new Set(["userId", "identityId", "memberId"]);
+
+// PATCH 8: collections with fat documents — projection mandatory on find/findOne.
+const FAT_COLLECTIONS = new Set(["leads", "inboxMessages", "inboxConversations"]);
+
+// PATCH 9: aggregate pipeline stage cap.
+const MAX_AGG_STAGES = 10;
 
 // PATCH 3: reserved collection names.
 const isReservedCollection = (name: string): boolean =>
@@ -203,6 +221,35 @@ export function validate(expr: string): ValidationResult {
   if (rootOp === "find" || rootOp === "findOne") {
     const filter = current.arguments[0];
     if (filter) walkForbiddenKeys(filter);
+  }
+
+  // PATCH 6: tenant filter mandatory on user-scoped collections.
+  if (TENANT_REQUIRED_COLLECTIONS.has(collection)) {
+    enforceTenantFilter(rootOp, current.arguments, collection);
+  }
+
+  // PATCH 7: .limit() explicit on find (auto-injection in interpreter is a safety net, not an excuse).
+  if (rootOp === "find" && !chainOps.includes("limit")) {
+    throw new ValidationError(
+      `find requires explicit .limit(N≤50) on '${collection}'`,
+      `append .limit(20) — fetch-side limits matter in production`,
+    );
+  }
+
+  // PATCH 8: projection mandatory on fat collections (find only — see helper).
+  if (FAT_COLLECTIONS.has(collection)) {
+    enforceProjection(rootOp, chainOps, collection);
+  }
+
+  // PATCH 9: cap aggregate pipeline stages.
+  if (rootOp === "aggregate") {
+    const pipeline = current.arguments[0];
+    if (pipeline && pipeline.type === "ArrayExpression" && pipeline.elements.length > MAX_AGG_STAGES) {
+      throw new ValidationError(
+        `aggregate pipeline exceeds ${MAX_AGG_STAGES} stages on '${collection}' (got ${pipeline.elements.length})`,
+        `split the work or simplify — fewer, well-indexed stages run faster`,
+      );
+    }
   }
 
   return {
@@ -410,4 +457,116 @@ function walkForbiddenKeys(node: AstNode): void {
     if (k === "loc" || k === "range" || k === "start" || k === "end" || k === "type") continue;
     walkForbiddenKeys(node[k]);
   }
+}
+
+// PATCH 6 helpers
+function isObjectIdCall(node: AstNode): boolean {
+  return !!node && node.type === "CallExpression" &&
+    node.callee?.type === "Identifier" && node.callee.name === "ObjectId";
+}
+
+function isArrayOfObjectIds(node: AstNode): boolean {
+  if (!node || node.type !== "ArrayExpression") return false;
+  if (node.elements.length === 0) return false;
+  return node.elements.every((el: AstNode) => isObjectIdCall(el));
+}
+
+// Tenant value must be an ObjectId(...) call OR { $in: [ObjectId(...), ...] }.
+// Anything else (null, $ne, $exists, raw string, $or-only) is rejected — key
+// presence alone is not enough.
+function isValidTenantValue(valueAst: AstNode): boolean {
+  if (isObjectIdCall(valueAst)) return true;
+  if (!valueAst || valueAst.type !== "ObjectExpression") return false;
+  if (valueAst.properties.length !== 1) return false;
+  const prop = valueAst.properties[0];
+  if (prop.type !== "Property" || prop.computed) return false;
+  const keyName =
+    prop.key.type === "Identifier" ? prop.key.name :
+    prop.key.type === "Literal" && typeof prop.key.value === "string" ? prop.key.value :
+    null;
+  if (keyName !== "$in") return false;
+  return isArrayOfObjectIds(prop.value);
+}
+
+function findTenantProp(objAst: AstNode): AstNode | null {
+  if (!objAst || objAst.type !== "ObjectExpression") return null;
+  for (const prop of objAst.properties) {
+    if (prop.type !== "Property" || prop.computed) continue;
+    const keyName =
+      prop.key.type === "Identifier" ? prop.key.name :
+      prop.key.type === "Literal" && typeof prop.key.value === "string" ? prop.key.value :
+      null;
+    if (keyName && TENANT_KEYS.has(keyName)) return prop;
+  }
+  return null;
+}
+
+function hasValidTenantFilter(objAst: AstNode): boolean {
+  const prop = findTenantProp(objAst);
+  return !!prop && isValidTenantValue(prop.value);
+}
+
+function enforceTenantFilter(
+  rootOp: string,
+  args: AstNode[],
+  collection: string,
+): void {
+  const hint = `value must be ObjectId('...') or { $in: [ObjectId('...'), ...] }`;
+  if (rootOp === "aggregate") {
+    const pipeline = args[0];
+    const firstStage = pipeline?.elements?.[0];
+    if (!firstStage || firstStage.type !== "ObjectExpression") {
+      throw new ValidationError(
+        `tenant filter required on '${collection}': first stage must be $match with userId/identityId/memberId`,
+        `prefix pipeline with { $match: { userId: ObjectId('...'), ... } }`,
+      );
+    }
+    const matchProp = firstStage.properties.find((p: AstNode) =>
+      p.type === "Property" && !p.computed && (
+        (p.key.type === "Identifier" && p.key.name === "$match") ||
+        (p.key.type === "Literal" && p.key.value === "$match")
+      ),
+    );
+    if (!matchProp || !hasValidTenantFilter(matchProp.value)) {
+      throw new ValidationError(
+        `tenant filter required on '${collection}': first stage must be $match with userId/identityId/memberId set to a concrete ObjectId`,
+        hint,
+      );
+    }
+    return;
+  }
+  if (rootOp === "distinct") {
+    if (!hasValidTenantFilter(args[1])) {
+      throw new ValidationError(
+        `tenant filter required on '${collection}': pass filter with userId/identityId/memberId as 2nd arg`,
+        `e.g. db.${collection}.distinct('field', { userId: ObjectId('...') })`,
+      );
+    }
+    return;
+  }
+  if (rootOp === "find" || rootOp === "findOne" || rootOp === "count" || rootOp === "countDocuments") {
+    if (!hasValidTenantFilter(args[0])) {
+      throw new ValidationError(
+        `tenant filter required on '${collection}': filter must include userId/identityId/memberId at top level with a concrete ObjectId`,
+        hint,
+      );
+    }
+  }
+}
+
+// PATCH 8 helper — projection enforced via .project()/.projection() chain on find.
+// findOne is exempt: the native driver does not propagate mongosh-style inline
+// projection (it would be passed as `options`, which silently drops the projection
+// keys). Trim 50KB handles single-doc bloat.
+function enforceProjection(
+  rootOp: string,
+  chainOps: string[],
+  collection: string,
+): void {
+  if (rootOp !== "find") return;
+  if (chainOps.includes("project") || chainOps.includes("projection")) return;
+  throw new ValidationError(
+    `projection required on '${collection}': append .project({...}) — fat documents`,
+    `e.g. db.${collection}.find({ userId: ObjectId('...') }).project({ _id: 1, ... }).limit(20)`,
+  );
 }

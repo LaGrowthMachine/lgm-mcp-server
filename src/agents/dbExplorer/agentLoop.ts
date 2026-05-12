@@ -17,6 +17,7 @@ const MAX_TOOL_USES_PER_ITERATION = 4;
 const CONTEXT_TOKEN_CAP = 150_000;
 const RETRY_BACKOFF_MS = 2_000;
 const QUERY_PREVIEW_MAX = 80;
+const AGENT_WALL_CLOCK_MS = 90_000;
 
 export interface QueryRecord {
   expr: string;
@@ -134,7 +135,7 @@ const extractText = (msg: Anthropic.Message): string =>
     .join("\n")
     .trim();
 
-export const runDbExplorerAgent = async (
+const runAgentLoop = async (
   brief: string,
 ): Promise<ExploreDbResult> => {
   const system = buildDbExplorerSystemPrompt();
@@ -250,6 +251,23 @@ export const runDbExplorerAgent = async (
   }
 
   throw new Error("Agent exceeded max iterations.");
+};
+
+export const runDbExplorerAgent = async (
+  brief: string,
+): Promise<ExploreDbResult> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("Agent exceeded 90s wall-clock budget")),
+      AGENT_WALL_CLOCK_MS,
+    );
+  });
+  try {
+    return await Promise.race([runAgentLoop(brief), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 };
 
 export const __resetClientForTests = (): void => {
