@@ -13,41 +13,36 @@ const getClient = (): Anthropic => {
   return client;
 };
 
-export interface ClassifyJsonArgs {
+export interface InferStructuredArgs {
   systemPrompt: string;
   userMessage: string;
+  toolName: string;
+  toolDescription: string;
+  toolSchema: Record<string, unknown>;
   maxTokens?: number;
 }
 
-const extractJson = (text: string): string => {
-  const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced) return fenced[1].trim();
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start !== -1 && end > start) return trimmed.slice(start, end + 1);
-  return trimmed;
-};
-
-export const classifyToJson = async <T>(args: ClassifyJsonArgs): Promise<T> => {
+export const inferStructured = async <T>(args: InferStructuredArgs): Promise<T> => {
   const response = await getClient().messages.create({
     model: DEFAULT_MODEL,
     max_tokens: args.maxTokens ?? 2000,
     system: args.systemPrompt,
+    tools: [
+      {
+        name: args.toolName,
+        description: args.toolDescription,
+        input_schema: args.toolSchema as Anthropic.Tool.InputSchema,
+      },
+    ],
+    tool_choice: { type: "tool", name: args.toolName },
     messages: [{ role: "user", content: args.userMessage }],
   });
 
-  const block = response.content[0];
-  if (!block || block.type !== "text") {
-    throw new Error("Inference returned no text content");
+  const toolUse = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+  );
+  if (!toolUse) {
+    throw new Error("Inference returned no tool_use content");
   }
-  const jsonText = extractJson(block.text);
-  try {
-    return JSON.parse(jsonText) as T;
-  } catch (err) {
-    const preview = jsonText.slice(0, 500);
-    throw new Error(
-      `Inference output is not valid JSON: ${(err as Error).message}. Preview: ${preview}`,
-    );
-  }
+  return toolUse.input as T;
 };

@@ -7,8 +7,11 @@ import { getApiKey } from "./requestContext";
 import {
   buildClassifierSystemPrompt,
   CONVERSATION_CLASSIFIER_VERSION,
+  CLASSIFIER_TOOL_NAME,
+  CLASSIFIER_TOOL_DESCRIPTION,
+  CLASSIFIER_TOOL_SCHEMA,
 } from "./prompts/conversationClassifier";
-import { classifyToJson } from "./inference";
+import { inferStructured } from "./inference";
 import { formatConversationForClassifier } from "./conversationFormatter";
 
 const resolveApiKey = (extra: { authInfo?: { token?: string } }): string => {
@@ -455,9 +458,12 @@ export const registerTools = (server: McpServer) => {
         const systemPrompt = buildClassifierSystemPrompt(delimiter);
         const userMessage = `<CONVERSATION_${delimiter}>\n${formatted.text}\n</CONVERSATION_${delimiter}>`;
 
-        const classification = await classifyToJson<Record<string, unknown>>({
+        const classification = await inferStructured<Record<string, unknown>>({
           systemPrompt,
           userMessage,
+          toolName: CLASSIFIER_TOOL_NAME,
+          toolDescription: CLASSIFIER_TOOL_DESCRIPTION,
+          toolSchema: CLASSIFIER_TOOL_SCHEMA as unknown as Record<string, unknown>,
         });
 
         await trackMcpEvent(apiKey, "mcp_tool_called", {

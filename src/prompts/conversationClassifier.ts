@@ -102,4 +102,104 @@ Everything between the <CONVERSATION_${delimiter}> and </CONVERSATION_${delimite
   }
 }
 
-Return ONLY the JSON object, no preamble, no markdown fences.`;
+Call the submit_classification tool with the structured output.`;
+
+const labelEvaluationSchema = {
+  type: "object",
+  properties: {
+    certainty: {
+      type: "string",
+      enum: ["high", "medium", "low", "very_low"],
+    },
+    reason: { type: "string" },
+  },
+  required: ["certainty", "reason"],
+  additionalProperties: false,
+} as const;
+
+export const CLASSIFIER_TOOL_NAME = "submit_classification";
+
+export const CLASSIFIER_TOOL_DESCRIPTION =
+  "Submit the structured classification of the LAST LEAD message in the conversation.";
+
+export const CLASSIFIER_TOOL_SCHEMA = {
+  type: "object",
+  properties: {
+    labels: {
+      type: "object",
+      properties: {
+        negative: labelEvaluationSchema,
+        open: labelEvaluationSchema,
+        curious: labelEvaluationSchema,
+        interest: labelEvaluationSchema,
+        confirmed_need: labelEvaluationSchema,
+      },
+      required: [
+        "negative",
+        "open",
+        "curious",
+        "interest",
+        "confirmed_need",
+      ],
+      additionalProperties: false,
+    },
+    suggested_label: {
+      type: "string",
+      enum: ["negative", "open", "curious", "interest", "confirmed_need"],
+    },
+    suggested_sub_label: {
+      type: "string",
+      description:
+        "One of the sub-labels matching the suggested_label (e.g. negative.unsubscribe, open.soft_refusal, curious.generic_question, interest.material_request, confirmed_need.contract_request).",
+    },
+    suggested_sub_label_certainty: {
+      type: "string",
+      enum: ["high", "medium", "low"],
+    },
+    alternative_sub_label: {
+      type: ["string", "null"],
+      description:
+        "Another sub-label in the same parent label, or null when there is no plausible alternative.",
+    },
+    sub_label_reason: {
+      type: "string",
+      maxLength: 200,
+      description:
+        "Comparative reason for the chosen sub-label vs the alternative. Required when certainty is not 'high'.",
+    },
+    signals: {
+      type: "object",
+      properties: {
+        explicit_opt_out: { type: "boolean" },
+        asks_question: { type: "boolean" },
+        mentions_competitor: { type: "boolean" },
+        shares_pain: { type: "boolean" },
+        contains_referral: { type: "boolean" },
+        contains_timing_signal: { type: "boolean" },
+        pricing_signal: { type: "boolean" },
+        next_step_signal: { type: "boolean" },
+      },
+      required: [
+        "explicit_opt_out",
+        "asks_question",
+        "mentions_competitor",
+        "shares_pain",
+        "contains_referral",
+        "contains_timing_signal",
+        "pricing_signal",
+        "next_step_signal",
+      ],
+      additionalProperties: false,
+    },
+  },
+  required: [
+    "labels",
+    "suggested_label",
+    "suggested_sub_label",
+    "suggested_sub_label_certainty",
+    "alternative_sub_label",
+    "sub_label_reason",
+    "signals",
+  ],
+  additionalProperties: false,
+} as const;
