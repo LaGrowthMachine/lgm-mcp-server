@@ -14,13 +14,15 @@
     "pack:dev": "tsc && cp manifest.json manifest.bak.json && node -e \"let m=require('./manifest.json');m.name='LGM-Sandbox';m.display_name='LaGrowthMachine Sandbox';require('fs').writeFileSync('manifest.json',JSON.stringify(m,null,2))\" && npx @anthropic-ai/mcpb pack && mv manifest.bak.json manifest.json && mv lgm-mcp-server.mcpb lgm-mcp-dev.mcpb"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.40.1",
+    "@anthropic-ai/sdk": "~0.40.1",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "axios": "^1.13.6",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "html-to-text": "^10.0.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
+    "@types/html-to-text": "^9.0.4",
     "@types/jest": "^29.5.11",
     "@types/node": "^20.11.0",
     "jest": "^29.7.0",

@@ -434,6 +434,13 @@ export const registerTools = (server: McpServer) => {
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
       try {
+        if (!/^[a-f0-9]{24}$/i.test(params.conversationId)) {
+          throw new McpFlowError(
+            "Invalid conversationId. Expected a 24-character hex string.",
+            400,
+          );
+        }
+
         const messages = await callFlow(
           apiKey,
           `/conversations/${params.conversationId}/messages`,

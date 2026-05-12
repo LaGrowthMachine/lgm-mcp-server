@@ -89,7 +89,7 @@ Everything between the <CONVERSATION_${delimiter}> and </CONVERSATION_${delimite
   "suggested_sub_label": "<one of 25 sub-labels matching the suggested_label>",
   "suggested_sub_label_certainty": "high|medium|low",
   "alternative_sub_label": "<another sub-label in the same parent, or null>",
-  "sub_label_reason": "<comparative reason, max 200 chars, REQUIRED when certainty != high>",
+  "sub_label_reason": "<comparative reason vs the alternative, max 200 chars; null when certainty is high or no plausible alternative>",
   "signals": {
     "explicit_opt_out": true|false,
     "asks_question": true|false,
@@ -162,10 +162,10 @@ export const CLASSIFIER_TOOL_SCHEMA = {
         "Another sub-label in the same parent label, or null when there is no plausible alternative.",
     },
     sub_label_reason: {
-      type: "string",
+      type: ["string", "null"],
       maxLength: 200,
       description:
-        "Comparative reason for the chosen sub-label vs the alternative. Required when certainty is not 'high'.",
+        "Comparative reason for the chosen sub-label vs the alternative. Null when certainty is 'high' or no plausible alternative exists.",
     },
     signals: {
       type: "object",
@@ -198,7 +198,6 @@ export const CLASSIFIER_TOOL_SCHEMA = {
     "suggested_sub_label",
     "suggested_sub_label_certainty",
     "alternative_sub_label",
-    "sub_label_reason",
     "signals",
   ],
   additionalProperties: false,

@@ -1,16 +1,15 @@
+import { convert } from "html-to-text";
+
 type RawMessage = Record<string, unknown>;
 
 const stripHtml = (s: string): string =>
-  s
-    .replace(/<br\s*\/?>(\s*)/gi, "\n")
-    .replace(/<\/?(p|div)>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
+  convert(s, {
+    wordwrap: false,
+    selectors: [
+      { selector: "img", format: "skip" },
+      { selector: "a", options: { ignoreHref: true } },
+    ],
+  })
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
@@ -22,7 +21,7 @@ const pickText = (m: RawMessage): string => {
   return "";
 };
 
-const isFromLead = (m: RawMessage): boolean => {
+const isFromLead = (m: RawMessage): boolean | null => {
   if (typeof m.isFromLead === "boolean") return m.isFromLead;
   if (typeof m.fromLead === "boolean") return m.fromLead;
   if (typeof m.direction === "string") {
@@ -41,7 +40,7 @@ const isFromLead = (m: RawMessage): boolean => {
   if (typeof m.sender === "string") {
     return m.sender.toLowerCase() === "lead";
   }
-  return false;
+  return null;
 };
 
 const pickTimestamp = (m: RawMessage): number => {
@@ -85,9 +84,10 @@ export const formatConversationForClassifier = (
 ): FormattedConversation => {
   const messages = extractMessagesArray(raw).filter((m) => !isSystemMessage(m));
 
-  const sorted = [...messages].sort(
-    (a, b) => pickTimestamp(a) - pickTimestamp(b),
-  );
+  const sorted = messages
+    .map((m, i) => ({ m, i }))
+    .sort((a, b) => pickTimestamp(a.m) - pickTimestamp(b.m) || a.i - b.i)
+    .map(({ m }) => m);
 
   const lines: string[] = [];
   let lastIsLead = false;
@@ -95,7 +95,14 @@ export const formatConversationForClassifier = (
     const text = pickText(m);
     if (!text) continue;
     const fromLead = isFromLead(m);
-    lines.push(`${fromLead ? "LEAD" : "SENDER"}: ${text}`);
+    if (fromLead === null) {
+      console.warn(
+        `[analyze_conversation] skipping message with unknown direction: id=${typeof m.id === "string" ? m.id : "?"}`,
+      );
+      continue;
+    }
+    const indented = text.replace(/\n/g, "\n  ");
+    lines.push(`${fromLead ? "LEAD" : "SENDER"}: ${indented}`);
     lastIsLead = fromLead;
   }
 
