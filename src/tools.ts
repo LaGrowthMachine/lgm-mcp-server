@@ -422,7 +422,7 @@ export const registerTools = (server: McpServer) => {
     "analyze_conversation",
     {
       description:
-        "Classify the last lead message in a conversation. Returns structured JSON with 5-label certainty evaluations, suggested label + sub-label, and 8 binary signals. Useful for detecting recoverable B2B prospect conversations. Server-side inference — billed to LGM.",
+        "Classify the last lead message in a conversation. Always returns JSON `{ conversation, analysis }` where `conversation` is the formatted transcript and `analysis.status` is `ok` (with `classification`: 5-label certainty evaluations, suggested label + sub-label, 8 binary signals) or `skipped` (with `reason`, e.g. no lead reply). Useful for detecting recoverable B2B prospect conversations. Server-side inference — billed to LGM.",
       inputSchema: {
         conversationId: z
           .string()
@@ -448,17 +448,27 @@ export const registerTools = (server: McpServer) => {
         const messages = await fetchConversationMessages(params.conversationId);
 
         const formatted = formatConversationForClassifier(messages);
+
         if (formatted.messageCount === 0) {
-          throw new McpFlowError(
-            "Conversation has no readable messages.",
-            404,
-          );
+          return formatTextContent("Conversation Analysis", {
+            conversation: formatted.text,
+            analysis: {
+              status: "skipped",
+              reason: "Conversation has no readable messages.",
+              messageCount: 0,
+            },
+          });
         }
+
         if (!formatted.hasLead) {
-          return formatTextContent("Analysis Skipped", {
-            reason:
-              "Conversation has no lead messages. Nothing to classify.",
-            messageCount: formatted.messageCount,
+          return formatTextContent("Conversation Analysis", {
+            conversation: formatted.text,
+            analysis: {
+              status: "skipped",
+              reason:
+                "Conversation has no lead messages. Nothing to classify.",
+              messageCount: formatted.messageCount,
+            },
           });
         }
 
@@ -480,10 +490,12 @@ export const registerTools = (server: McpServer) => {
         });
 
         return formatTextContent("Conversation Analysis", {
-          conversationId: params.conversationId,
-          promptVersion: CONVERSATION_CLASSIFIER_VERSION,
-          messageCount: formatted.messageCount,
-          classification,
+          conversation: formatted.text,
+          analysis: {
+            status: "ok",
+            promptVersion: CONVERSATION_CLASSIFIER_VERSION,
+            classification,
+          },
         });
       } catch (error) {
         return handleToolError(error);
