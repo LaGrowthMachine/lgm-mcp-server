@@ -20,9 +20,10 @@ describe("formatConversationForClassifier — DB shape", () => {
     expect(result.messageCount).toBe(2);
     expect(result.lastIsLead).toBe(true);
     expect(result.hasLead).toBe(true);
-    expect(result.text).toBe(
-      "SENDER: Bonjour\n\nLEAD: Salut, qui êtes-vous ?",
-    );
+    expect(result.lines).toEqual([
+      "SENDER: Bonjour",
+      "LEAD: Salut, qui êtes-vous ?",
+    ]);
   });
 
   it("treats SEND_FAILED as sender", () => {
@@ -65,7 +66,7 @@ describe("formatConversationForClassifier — DB shape", () => {
     ];
     const result = formatConversationForClassifier(messages);
     expect(result.messageCount).toBe(1);
-    expect(result.text).toBe("LEAD: Pas dispo cette semaine.");
+    expect(result.lines).toEqual(["LEAD: Pas dispo cette semaine."]);
   });
 
   it("extracts text from content.message for the DB shape", () => {
@@ -77,7 +78,7 @@ describe("formatConversationForClassifier — DB shape", () => {
       },
     ];
     const result = formatConversationForClassifier(messages);
-    expect(result.text).toBe("LEAD: Hello world");
+    expect(result.lines).toEqual(["LEAD: Hello world"]);
   });
 
   it("strips HTML from content.message (email case)", () => {
@@ -91,10 +92,11 @@ describe("formatConversationForClassifier — DB shape", () => {
       },
     ];
     const result = formatConversationForClassifier(messages);
-    expect(result.text).toContain("LEAD:");
-    expect(result.text).toContain("Hello world");
-    expect(result.text).toContain("Bye");
-    expect(result.text).not.toContain("<");
+    expect(result.lines).toHaveLength(1);
+    expect(result.lines[0]).toContain("LEAD:");
+    expect(result.lines[0]).toContain("Hello world");
+    expect(result.lines[0]).toContain("Bye");
+    expect(result.lines[0]).not.toContain("<");
   });
 
   it("preserves plaintext containing `<` (not HTML)", () => {
@@ -106,7 +108,7 @@ describe("formatConversationForClassifier — DB shape", () => {
       },
     ];
     const result = formatConversationForClassifier(messages);
-    expect(result.text).toBe("LEAD: I think price < 50€ is fair");
+    expect(result.lines).toEqual(["LEAD: I think price < 50€ is fair"]);
   });
 
   it("sorts messages by createdAt ascending regardless of input order", () => {
@@ -128,9 +130,11 @@ describe("formatConversationForClassifier — DB shape", () => {
       },
     ];
     const result = formatConversationForClassifier(messages);
-    expect(result.text).toBe(
-      "SENDER: first\n\nLEAD: second\n\nLEAD: third",
-    );
+    expect(result.lines).toEqual([
+      "SENDER: first",
+      "LEAD: second",
+      "LEAD: third",
+    ]);
     expect(result.lastIsLead).toBe(true);
   });
 
@@ -142,6 +146,6 @@ describe("formatConversationForClassifier — DB shape", () => {
     const result = formatConversationForClassifier(messages);
     expect(result.messageCount).toBe(2);
     expect(result.lastIsLead).toBe(true);
-    expect(result.text).toBe("SENDER: outbound\n\nLEAD: inbound");
+    expect(result.lines).toEqual(["SENDER: outbound", "LEAD: inbound"]);
   });
 });

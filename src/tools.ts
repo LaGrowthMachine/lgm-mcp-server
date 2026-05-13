@@ -422,7 +422,7 @@ export const registerTools = (server: McpServer) => {
     "analyze_conversation",
     {
       description:
-        "Classify the last lead message in a conversation. Always returns JSON `{ conversation, analysis }` where `conversation` is the formatted transcript and `analysis.status` is `ok` (with `classification`: 5-label certainty evaluations, suggested label + sub-label, 8 binary signals) or `skipped` (with `reason`, e.g. no lead reply). Useful for detecting recoverable B2B prospect conversations. Server-side inference — billed to LGM.",
+        "Classify the last lead message in a conversation. Always returns JSON `{ conversation, analysis }` where `conversation` is an array of formatted message lines (each `\"SENDER: ...\"` or `\"LEAD: ...\"`) and `analysis.status` is `ok` (with `classification`: 5-label certainty evaluations, suggested label + sub-label, 8 binary signals) or `skipped` (with `reason`, e.g. no lead reply). Useful for detecting recoverable B2B prospect conversations. Server-side inference — billed to LGM.",
       inputSchema: {
         conversationId: z
           .string()
@@ -451,7 +451,7 @@ export const registerTools = (server: McpServer) => {
 
         if (formatted.messageCount === 0) {
           return formatTextContent("Conversation Analysis", {
-            conversation: formatted.text,
+            conversation: formatted.lines,
             analysis: {
               status: "skipped",
               reason: "Conversation has no readable messages.",
@@ -462,7 +462,7 @@ export const registerTools = (server: McpServer) => {
 
         if (!formatted.hasLead) {
           return formatTextContent("Conversation Analysis", {
-            conversation: formatted.text,
+            conversation: formatted.lines,
             analysis: {
               status: "skipped",
               reason:
@@ -474,7 +474,7 @@ export const registerTools = (server: McpServer) => {
 
         const delimiter = crypto.randomBytes(8).toString("hex");
         const systemPrompt = buildClassifierSystemPrompt(delimiter);
-        const userMessage = `<CONVERSATION_${delimiter}>\n${formatted.text}\n</CONVERSATION_${delimiter}>`;
+        const userMessage = `<CONVERSATION_${delimiter}>\n${formatted.lines.join("\n\n")}\n</CONVERSATION_${delimiter}>`;
 
         const classification = await inferStructured<Record<string, unknown>>({
           systemPrompt,
@@ -490,7 +490,7 @@ export const registerTools = (server: McpServer) => {
         });
 
         return formatTextContent("Conversation Analysis", {
-          conversation: formatted.text,
+          conversation: formatted.lines,
           analysis: {
             status: "ok",
             promptVersion: CONVERSATION_CLASSIFIER_VERSION,

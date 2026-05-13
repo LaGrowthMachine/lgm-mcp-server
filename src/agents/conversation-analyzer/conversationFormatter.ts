@@ -77,7 +77,7 @@ const pickTimestamp = (m: RawMessage): number => {
 };
 
 export interface FormattedConversation {
-  text: string;
+  lines: string[];
   messageCount: number;
   lastIsLead: boolean;
   hasLead: boolean;
@@ -131,7 +131,7 @@ export const formatConversationForClassifier = (
   }
 
   return {
-    text: lines.join("\n\n"),
+    lines,
     messageCount: lines.length,
     lastIsLead,
     hasLead,
