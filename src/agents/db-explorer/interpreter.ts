@@ -27,11 +27,11 @@ export interface RunQueryError {
   durationMs: number;
 }
 
-const MAX_TIME_MS = 10_000;
-const RESULT_BYTE_BUDGET = 50_000;
+const MAX_TIME_MS = 20_000;
+const RESULT_BYTE_BUDGET = 100_000;
 const REGEX_LITERAL_MAX = 200;
 const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 50;
+const MAX_LIMIT = 100;
 const MIN_LIMIT = 1;
 const MAX_SKIP = 100_000;
 const ALLOWED_REGEX_FLAGS = /^[imsx]*$/;
@@ -258,7 +258,7 @@ const trimResult = (result: unknown): TrimmedResult => {
       return { output: EJSON.parse(s, { relaxed: true }), truncated: false };
     }
     return {
-      output: "<single document exceeds 50KB — use projection>",
+      output: "<single document exceeds 100KB — use projection>",
       truncated: true,
     };
   }

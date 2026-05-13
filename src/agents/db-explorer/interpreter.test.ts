@@ -55,7 +55,7 @@ describe("interpreter — happy paths", () => {
     if (r.ok) expect(r.output).toBe(5);
   });
 
-  it("clamps .limit(1000) to 50", async () => {
+  it("clamps .limit(1000) to 100", async () => {
     const cursor = {
       limit: jest.fn().mockReturnThis(),
       toArray: jest.fn().mockResolvedValue([]),
@@ -63,7 +63,7 @@ describe("interpreter — happy paths", () => {
     const coll = mockCollection({ find: jest.fn().mockReturnValue(cursor) });
     const v = validate("db.users.find({}).limit(1000)");
     await runValidatedQuery(mockDb(coll), v);
-    expect(cursor.limit).toHaveBeenLastCalledWith(50);
+    expect(cursor.limit).toHaveBeenLastCalledWith(100);
   });
 
   it("clamps .limit(0) to default 20", async () => {
@@ -88,7 +88,7 @@ describe("interpreter — happy paths", () => {
     expect(cursor.limit).toHaveBeenLastCalledWith(20);
   });
 
-  it("clamps .maxTimeMS(60_000) to 10_000", async () => {
+  it("clamps .maxTimeMS(60_000) to 20_000", async () => {
     const cursor = {
       limit: jest.fn().mockReturnThis(),
       maxTimeMS: jest.fn().mockReturnThis(),
@@ -97,7 +97,7 @@ describe("interpreter — happy paths", () => {
     const coll = mockCollection({ find: jest.fn().mockReturnValue(cursor) });
     const v = validate("db.users.find({}).maxTimeMS(60000).limit(5)");
     await runValidatedQuery(mockDb(coll), v);
-    expect(cursor.maxTimeMS).toHaveBeenCalledWith(10_000);
+    expect(cursor.maxTimeMS).toHaveBeenCalledWith(20_000);
   });
 });
 
@@ -201,8 +201,8 @@ describe("interpreter — EJSON trim", () => {
     }
   });
 
-  it("trims array doc-by-doc when cumulative > 50KB", async () => {
-    const bigDoc = { pad: "x".repeat(30_000) };
+  it("trims array doc-by-doc when cumulative > 100KB", async () => {
+    const bigDoc = { pad: "x".repeat(60_000) };
     const cursor = {
       limit: jest.fn().mockReturnThis(),
       toArray: jest.fn().mockResolvedValue([bigDoc, bigDoc, bigDoc]),
@@ -218,8 +218,8 @@ describe("interpreter — EJSON trim", () => {
     }
   });
 
-  it("flags single doc > 50KB with dedicated message", async () => {
-    const huge = { pad: "x".repeat(60_000) };
+  it("flags single doc > 100KB with dedicated message", async () => {
+    const huge = { pad: "x".repeat(110_000) };
     const coll = mockCollection({
       findOne: jest.fn().mockResolvedValue(huge),
     });
@@ -227,7 +227,7 @@ describe("interpreter — EJSON trim", () => {
     const r = await runValidatedQuery(mockDb(coll), v);
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.output).toMatch(/exceeds 50KB/);
+      expect(r.output).toMatch(/exceeds 100KB/);
       expect(r.truncated).toBe(true);
     }
   });

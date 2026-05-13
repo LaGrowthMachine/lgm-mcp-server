@@ -103,7 +103,7 @@ describe("agentLoop", () => {
   });
 
   it("MAX_ITERATIONS exceeded", async () => {
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 12; i++) {
       messagesCreate.mockResolvedValueOnce(
         mkResp("tool_use", [toolUse(`t${i}`, "db.users.countDocuments({})")]),
       );
@@ -235,9 +235,13 @@ describe("agentLoop", () => {
         toolUse("t3", "db.x.countDocuments({})"),
         toolUse("t4", "db.x.countDocuments({})"),
         toolUse("t5", "db.x.countDocuments({})"),
+        toolUse("t6", "db.x.countDocuments({})"),
+        toolUse("t7", "db.x.countDocuments({})"),
+        toolUse("t8", "db.x.countDocuments({})"),
+        toolUse("t9", "db.x.countDocuments({})"),
       ]),
     );
-    await expect(runDbExplorerAgent("storm")).rejects.toThrow(/5 tool_use blocks/);
+    await expect(runDbExplorerAgent("storm")).rejects.toThrow(/9 tool_use blocks/);
   });
 });
 

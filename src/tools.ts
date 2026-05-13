@@ -13,9 +13,9 @@ import {
 } from "./agents/conversationAnalyzer/conversationClassifier";
 import { inferStructured } from "./agents/conversationAnalyzer/inference";
 import { formatConversationForClassifier } from "./agents/conversationAnalyzer/conversationFormatter";
-import { assertLgmStaff } from "./agents/dbExplorer/acl";
-import { runDbExplorerAgent } from "./agents/dbExplorer/agentLoop";
-import { DB_EXPLORER_PROMPT_VERSION } from "./agents/dbExplorer/prompt";
+import { assertLgmStaff } from "./agents/db-explorer/acl";
+import { runDbExplorerAgent } from "./agents/db-explorer/agentLoop";
+import { DB_EXPLORER_PROMPT_VERSION } from "./agents/db-explorer/prompt";
 
 const resolveApiKey = (extra: { authInfo?: { token?: string } }): string => {
   return getApiKey() || extra?.authInfo?.token || "";
@@ -565,4 +565,5 @@ export const registerTools = (server: McpServer) => {
       }
     },
   );
+
 };

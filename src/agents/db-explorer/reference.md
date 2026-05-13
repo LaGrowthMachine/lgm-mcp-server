@@ -1,52 +1,52 @@
-# DB Context
+# DB Reference
 
-> Source de vérité pour l'agent `explore_db` du MCP server.
-> Adapté de `harness/docs/db-context.md` (2026-04-30, généré par `/db-explorer-init`).
-> Stack source : Node.js 20 + TypeScript + Express, driver `mongodb` natif — pas d'ORM (Repo : `apps/lgm-apis`).
+Source de vérité sur la structure et les particularités de la base MongoDB LGM (production, lue via slave readonly). Référence consommée par le skill `db-explorer` en local Claude Code et par l'agent serveur côté Heroku.
 
----
+Adapté de `harness/docs/db-context.md` (2026-04-30, généré par `/db-explorer-init`). Stack source : Node.js 20 + TypeScript + Express, driver `mongodb` natif (Repo : `apps/lgm-apis`).
 
-## ⚡ Checklist avant CHAQUE query
+## Sizes
 
-- [ ] Tenant filter (`userId`/`identityId`/`memberId`) en clé top-level du filtre / 1ᵉʳ `$match`
-- [ ] `deleted: false` si collection soft-deletée
-- [ ] `.project({...})` sur leads / inbox*
-- [ ] `.limit(N≤50)` explicite sur find (auto-injection = filet, pas excuse)
-- [ ] aggregate : `$match` indexé en stage 1, `$limit` avant `$group`/`$sort` lourd
-- [ ] Champ(s) filtré(s) couvert(s) par un index (cf section Indexes ci-dessous)
-- [ ] Aucun `$lookup` / `$where` / regex non ancrée
+<!-- Section auto-générée par `npm run refresh-reference`. Ordres de grandeur uniquement. -->
 
-Si une case n'est pas cochable → reformule ou refuse.
+_Dernière mise à jour : 2026-05-13_
 
----
+- users : 60 078
+- members : 67 456
+- identities : 70 073
+- audiences : 211 047
+- campaigns : 267 079
+- campaignstats : 287 410
+- sequences : 270 553
+- templates : 1 196 700
+- audienceStats : 1 215 065
+- emailSlotsStats : 16 356 835
+- actions : 22 104 663
+- inboxConversations : 13 034 131
+- inboxMessages : 60 416 047
+- leads : 69 919 468
+- leadStats : 62 757 846
+- logs : **657 108 897**
 
-## Règles pour l'agent
-
-- **Read-only** enforced structurellement par le validator AST côté serveur — toute tentative de mutation (`insert*`, `update*`, `delete*`, `drop*`, `bulkWrite`, `eval`, `runCommand`, etc.) est rejetée avant exécution. Pas de bypass.
-- **Limites auto** : `.limit(20)` injecté si absent ; `.limit(N>50)` capé à 50 ; `.limit(N<=0)` recap à 20 ; output tronqué à 50 KB document-par-document ; `maxTimeMS` dur 10 000 ms.
-- **Toujours projeter** : `.project({champ:1, _id:1})` pour les `find`. Sans projection, les fat docs (`leads`, `inboxMessages`) déclenchent la troncature avant que tu aies ce qui t'intéresse.
-- **Filtre tenant obligatoire** : toute requête user-scoped inclut `userId` (racine `ObjectId`). Sur les collections de queue/inbox/logs, préférer `identityId` (index plus sélectif). Sans tenancy, tu dépasses la limite et tu pollues les résultats.
-- **Pas de scan** : avant chaque requête, vérifier que les champs filtrés correspondent à un index existant (cf section *Indexes*). Sinon, reformuler ou prévenir l'utilisateur.
-- **Atlas Search** : pour `leads`, c'est l'**unique chemin rapide** pour les recherches textuelles ou multi-champs. Index Lucene `leads_search_2`, accédé via `$search` (pas `$match`).
-- **ObjectId** explicite : tout filtre sur `_id`, `userId`, `identityId`, `memberId`, `campaignId`, `leadId`, `audiences[]` requiert `ObjectId('…')`. Filtrer une chaîne brute renvoie systématiquement zéro résultat.
-- **Soft-delete** : `{ deleted: false }` implicite sur `audiences`, `campaigns`, `identities`, `inboxConversations`, `inboxMessages`, `leads`, `templates`, `audienceStats`. L'oublier remonte des tombstones et fausse les comptes.
-- **`$lookup`/`$unionWith`/`$graphLookup` désactivés** Phase 1 — décompose en plusieurs queries séparées.
+Notes :
+- `logs` ≈ 657 M docs — toute query non-tenant-scopée + non-indexée explose. Cible un `identityId` précis et un `type`/`status` connu.
+- `leadStats` / `audienceStats` ne sont pas 1:1 avec leur parent (multiples lignes par parent : par type / par jour).
 
 ## Conventions
 
-- **`_id`** : `ObjectId` BSON natif. Aucun id custom (pas de `uuid`, pas de slug).
-- **Timestamps** : `createdAt` et `modifiedAt`. Type **non uniforme** — soit `Date` BSON, soit `number` (epoch ms) selon la collection. Faire un `findOne(...).project({createdAt:1})` avant tout filtre `$gt`/`$lt`.
+- **`_id`** : `ObjectId` BSON natif. Aucun id custom (pas de uuid, pas de slug).
+- **Timestamps** : `createdAt` et `modifiedAt`. **Type non uniforme** — soit `Date` BSON, soit `number` (epoch ms) selon la collection. Faire un `findOne(...).project({createdAt:1})` avant tout filtre `$gt`/`$lt`.
 - **Soft-delete** : flag booléen `deleted`. Toujours filtrer `{ deleted: false }`. `users`, `members`, `actions`, `logs`, `notifications` **n'ont pas** ce flag.
-- **Multi-tenancy** : `userId: ObjectId` est la racine. `identityId: ObjectId` désigne un compte connecté (LinkedIn / email) d'un user — clé d'index préférentielle sur queue/inbox/logs. `memberId: ObjectId` désigne un humain dans une équipe (collab inbox).
-- **Naming** : Collections en camelCase pluriel. Exceptions historiques : singulier (`token`, `gender`, `infra`), kebab-case (`logs-external`).
+- **Multi-tenancy** : `userId: ObjectId` est la racine. `identityId: ObjectId` = compte connecté (LinkedIn / email) d'un user — clé d'index préférentielle sur queue/inbox/logs. `memberId: ObjectId` = humain dans une équipe (collab inbox).
+- **Naming** : collections en camelCase pluriel. Exceptions historiques : singulier (`token`, `gender`, `infra`), kebab-case (`logs-external`).
+- **ObjectId explicite** : tout filtre sur `_id`, `userId`, `identityId`, `memberId`, `campaignId`, `leadId`, `audiences[]` requiert `ObjectId('…')`. Filtrer une chaîne brute renvoie 0 résultat sans erreur.
 
 ## Collections
 
 ### Hot path — toujours filtrer par tenant
 
-- **`actions`** — file d'actions planifiées (envoi LinkedIn, email, scraping). Filtrer en premier par `identityId` puis `type`/`available`/`scheduledAt`.
+- **`actions`** — file d'actions planifiées (envoi LinkedIn, email, scraping). Filtrer par `identityId` puis `type`/`available`/`scheduledAt`.
 - **`leads`** — prospects. Filtrer `userId` puis `deleted`, puis `audiences` (array d'ObjectId). Atlas Search pour les recherches textuelles. Document gras — toujours projeter.
-- **`logs`** — historique d'événements (envoi, ouverture, clic, reply). Préférer `identityId` ; `userId` accepté.
+- **`logs`** — historique d'événements (envoi, ouverture, clic, reply). Préférer `identityId` ; `userId` accepté. Volume extrême (657M).
 - **`inboxMessages`** — messages reçus/envoyés. Filtrer `userId + identityId` ou `conversationId`.
 - **`inboxConversations`** — fils de discussion. Filtrer `userId + identityId`.
 
@@ -85,9 +85,16 @@ Si une case n'est pas cochable → reformule ou refuse.
 - **`logs`** : `identityId_1_type_1_status_1_customIdentifier_1`.
 - **`users`** : `email_1`, `apikey_1`, `externalApikey_1` (sparse).
 
+**Préfixe d'index** : compound `{a:1, b:1, c:1}` sert `{a}`, `{a,b}`, `{a,b,c}` mais **pas** `{b}` ou `{c}`. Ordre des champs très spécifique sur `actions`.
+
 ### Atlas Search — `leads_search_2`
 
-Lucene, géré dans Atlas UI. Champs filtrables (`equals`) : `userId`, `audiences`, `deleted`. Champs `wildcard` : `firstnameSanitized`, `lastnameSanitized`, `jobTitleSanitized`, `industrySanitized`, `locationSanitized`, `companyNameSanitized`, `persoEmail`, `proEmail`. `text` sur `tags.tag`. `range` sur `countAudiences`, `lastMessageSentAt`.
+Lucene, géré dans Atlas UI. **Seule voie rapide pour les recherches textuelles sur `leads`.** Accédé via `$search` (pas `$match`).
+
+- Champs filtrables (`equals`) : `userId`, `audiences`, `deleted`.
+- Champs `wildcard` : `firstnameSanitized`, `lastnameSanitized`, `jobTitleSanitized`, `industrySanitized`, `locationSanitized`, `companyNameSanitized`, `persoEmail`, `proEmail`.
+- `text` sur `tags.tag`.
+- `range` sur `countAudiences`, `lastMessageSentAt`.
 
 ### Text indexes (≠ Atlas Search)
 
@@ -149,7 +156,7 @@ db.leads.aggregate([
 ])
 ```
 
-C'est la **seule voie rapide** pour les filtres textuels sur leads. Ne **jamais** remplacer par `$match: { firstname: /john/i }` → COLLSCAN sur 100M+ docs.
+Ne **jamais** remplacer par `$match: { firstname: /john/i }` → COLLSCAN sur 70M+ docs.
 
 ### 5. Top types d'actions en attente pour une identité
 
@@ -181,10 +188,10 @@ db.actions.distinct('identityId', {
 - **`leads.campaignId` n'existe pas.** Pour les leads d'une campagne, lire `campaigns.audienceId` puis filtrer `leads.audiences`.
 - **Atlas Search vs `$match`** : `leads_search_2` est invisible aux requêtes `find`/`$match`. Toute recherche textuelle hors `$search` produit un COLLSCAN.
 - **Soft-delete oublié** : sur `audiences`, `campaigns`, `leads`, `inbox*`, `templates`, sans `deleted: false` → tombstones inclus.
-- **Préfixe d'index** : compound `{a:1, b:1, c:1}` sert `{a}`, `{a,b}`, `{a,b,c}` mais **pas** `{b}` ou `{c}`. Ordre des champs très spécifique sur `actions`.
-- **`$or` coûteux** : préférer `$in` quand c'est un même champ.
+- **`$or` coûteux** : préférer `$in` quand c'est le même champ.
 - **TTL trompeur** : `lknConversations` (~3h), `inboxFilters` (4h), `emailstosearch` (2j) — comptes non reproductibles minute à minute.
-- **Types de timestamps non uniformes** : `createdAt` peut être `Date` ou `number` (epoch ms) selon la collection. Vérifier par `findOne().project({createdAt:1})` avant tout `$gt`/`$lt`.
+- **Types de timestamps non uniformes** : `createdAt` peut être `Date` ou `number` (epoch ms) selon la collection.
 - **ObjectId implicite** : passer une string sur `userId`/`identityId` retourne 0 docs sans erreur.
 - **Stats dénormalisées** : `audienceStats`, `campaignLeadsStats`, `campaignstats`, `leadStats`, `emailSlotsStats` peuvent dériver — recompter depuis la source si fiabilité requise.
 - **`logs` partitionnée** : haut-trafic, anciens docs archivés/agrégés ailleurs (`logs-external`, `logsCampaigns`, `logsLead`, `logsIdentityDaily`).
+- **`$lookup`/`$unionWith`/`$graphLookup` désactivés** côté validator — décompose en plusieurs queries séparées.

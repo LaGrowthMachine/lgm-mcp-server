@@ -13,12 +13,12 @@ import { getDb } from "./mongoClient";
 
 const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 4_096;
-const MAX_ITERATIONS = 6;
-const MAX_TOOL_USES_PER_ITERATION = 4;
+const MAX_ITERATIONS = 12;
+const MAX_TOOL_USES_PER_ITERATION = 8;
 const CONTEXT_TOKEN_CAP = 150_000;
 const RETRY_BACKOFF_MS = 2_000;
 const QUERY_PREVIEW_MAX = 80;
-const AGENT_WALL_CLOCK_MS = 90_000;
+const AGENT_WALL_CLOCK_MS = 180_000;
 
 interface QueryRecord {
   expr: string;
