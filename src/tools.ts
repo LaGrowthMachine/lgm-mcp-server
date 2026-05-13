@@ -10,9 +10,10 @@ import {
   CLASSIFIER_TOOL_NAME,
   CLASSIFIER_TOOL_DESCRIPTION,
   CLASSIFIER_TOOL_SCHEMA,
-} from "./agents/conversationAnalyzer/conversationClassifier";
-import { inferStructured } from "./agents/conversationAnalyzer/inference";
-import { formatConversationForClassifier } from "./agents/conversationAnalyzer/conversationFormatter";
+} from "./agents/conversation-analyzer/conversationClassifier";
+import { inferStructured } from "./agents/conversation-analyzer/inference";
+import { formatConversationForClassifier } from "./agents/conversation-analyzer/conversationFormatter";
+import { fetchConversationMessages } from "./agents/conversation-analyzer/messageFetcher";
 import { assertLgmStaff } from "./agents/db-explorer/acl";
 import { runDbExplorerAgent } from "./agents/db-explorer/agentLoop";
 import { DB_EXPLORER_PROMPT_VERSION } from "./agents/db-explorer/prompt";
@@ -444,10 +445,7 @@ export const registerTools = (server: McpServer) => {
           );
         }
 
-        const messages = await callFlow(
-          apiKey,
-          `/conversations/${params.conversationId}/messages`,
-        );
+        const messages = await fetchConversationMessages(params.conversationId);
 
         const formatted = formatConversationForClassifier(messages);
         if (formatted.messageCount === 0) {

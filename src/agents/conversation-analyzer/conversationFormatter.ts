@@ -2,8 +2,11 @@ import { convert } from "html-to-text";
 
 type RawMessage = Record<string, unknown>;
 
-const stripHtml = (s: string): string =>
-  convert(s, {
+const HTML_TAG_RE = /<[a-z!\/][^>]*>/i;
+
+const stripHtml = (s: string): string => {
+  if (!HTML_TAG_RE.test(s)) return s.replace(/\n{3,}/g, "\n\n").trim();
+  return convert(s, {
     wordwrap: false,
     selectors: [
       { selector: "img", format: "skip" },
@@ -12,9 +15,22 @@ const stripHtml = (s: string): string =>
   })
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+};
 
 const pickText = (m: RawMessage): string => {
-  const candidates = [m.text, m.content, m.body, m.message, m.html];
+  const nested =
+    typeof m.content === "object" && m.content !== null
+      ? (m.content as Record<string, unknown>)
+      : undefined;
+  const candidates = [
+    m.text,
+    nested?.message,
+    nested?.text,
+    m.content,
+    m.body,
+    m.message,
+    m.html,
+  ];
   for (const c of candidates) {
     if (typeof c === "string" && c.trim()) return stripHtml(c);
   }
@@ -22,6 +38,11 @@ const pickText = (m: RawMessage): string => {
 };
 
 const isFromLead = (m: RawMessage): boolean | null => {
+  if (typeof m.status === "string") {
+    const s = m.status.toUpperCase();
+    if (s === "RECEIVED") return true;
+    if (s === "SENT" || s === "SEND_FAILED") return false;
+  }
   if (typeof m.isFromLead === "boolean") return m.isFromLead;
   if (typeof m.fromLead === "boolean") return m.fromLead;
   if (typeof m.direction === "string") {
