@@ -80,6 +80,7 @@ export interface FormattedConversation {
   text: string;
   messageCount: number;
   lastIsLead: boolean;
+  hasLead: boolean;
 }
 
 const extractMessagesArray = (raw: unknown): RawMessage[] => {
@@ -112,6 +113,7 @@ export const formatConversationForClassifier = (
 
   const lines: string[] = [];
   let lastIsLead = false;
+  let hasLead = false;
   for (const m of sorted) {
     const text = pickText(m);
     if (!text) continue;
@@ -125,11 +127,13 @@ export const formatConversationForClassifier = (
     const indented = text.replace(/\n/g, "\n  ");
     lines.push(`${fromLead ? "LEAD" : "SENDER"}: ${indented}`);
     lastIsLead = fromLead;
+    if (fromLead) hasLead = true;
   }
 
   return {
     text: lines.join("\n\n"),
     messageCount: lines.length,
     lastIsLead,
+    hasLead,
   };
 };

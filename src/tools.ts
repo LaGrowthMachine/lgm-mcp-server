@@ -454,10 +454,10 @@ export const registerTools = (server: McpServer) => {
             404,
           );
         }
-        if (!formatted.lastIsLead) {
+        if (!formatted.hasLead) {
           return formatTextContent("Analysis Skipped", {
             reason:
-              "Last message is from the sender, not the lead. Nothing to classify.",
+              "Conversation has no lead messages. Nothing to classify.",
             messageCount: formatted.messageCount,
           });
         }

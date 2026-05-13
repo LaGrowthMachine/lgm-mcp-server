@@ -19,6 +19,7 @@ describe("formatConversationForClassifier — DB shape", () => {
 
     expect(result.messageCount).toBe(2);
     expect(result.lastIsLead).toBe(true);
+    expect(result.hasLead).toBe(true);
     expect(result.text).toBe(
       "SENDER: Bonjour\n\nLEAD: Salut, qui êtes-vous ?",
     );
@@ -34,6 +35,19 @@ describe("formatConversationForClassifier — DB shape", () => {
     ];
     const result = formatConversationForClassifier(messages);
     expect(result.lastIsLead).toBe(false);
+    expect(result.hasLead).toBe(false);
+  });
+
+  it("flags hasLead=true when a LEAD message exists earlier in the thread", () => {
+    const messages = [
+      { status: "SENT", createdAt: 1000, content: { message: "Bonjour" } },
+      { status: "RECEIVED", createdAt: 2000, content: { message: "Pas intéressé" } },
+      { status: "SEND_FAILED", createdAt: 3000, content: { message: "réponse ratée" } },
+    ];
+    const result = formatConversationForClassifier(messages);
+    expect(result.messageCount).toBe(3);
+    expect(result.lastIsLead).toBe(false);
+    expect(result.hasLead).toBe(true);
   });
 
   it("skips messages with status INFO (system events)", () => {
