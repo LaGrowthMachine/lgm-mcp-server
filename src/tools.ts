@@ -437,6 +437,19 @@ export const registerTools = (server: McpServer) => {
     },
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
+      const progressToken = extra._meta?.progressToken;
+      const sendProgress = async (progress: number) => {
+        if (progressToken === undefined) return;
+        try {
+          await extra.sendNotification({
+            method: "notifications/progress",
+            params: { progressToken, progress, total: 100 },
+          });
+        } catch {
+          // notifications are best-effort; ignore transport errors
+        }
+      };
+      await sendProgress(1);
       try {
         if (!/^[a-f0-9]{24}$/i.test(params.conversationId)) {
           throw new McpFlowError(
@@ -472,17 +485,32 @@ export const registerTools = (server: McpServer) => {
           });
         }
 
+        await sendProgress(20);
+
         const delimiter = crypto.randomBytes(8).toString("hex");
         const systemPrompt = buildClassifierSystemPrompt(delimiter);
         const userMessage = `<CONVERSATION_${delimiter}>\n${formatted.text}\n</CONVERSATION_${delimiter}>`;
 
-        const classification = await inferStructured<Record<string, unknown>>({
-          systemPrompt,
-          userMessage,
-          toolName: CLASSIFIER_TOOL_NAME,
-          toolDescription: CLASSIFIER_TOOL_DESCRIPTION,
-          toolSchema: CLASSIFIER_TOOL_SCHEMA as unknown as Record<string, unknown>,
-        });
+        let heartbeatProgress = 20;
+        const heartbeat = setInterval(() => {
+          heartbeatProgress = Math.min(heartbeatProgress + 5, 90);
+          void sendProgress(heartbeatProgress);
+        }, 4000);
+
+        let classification: Record<string, unknown>;
+        try {
+          classification = await inferStructured<Record<string, unknown>>({
+            systemPrompt,
+            userMessage,
+            toolName: CLASSIFIER_TOOL_NAME,
+            toolDescription: CLASSIFIER_TOOL_DESCRIPTION,
+            toolSchema: CLASSIFIER_TOOL_SCHEMA as unknown as Record<string, unknown>,
+          });
+        } finally {
+          clearInterval(heartbeat);
+        }
+
+        await sendProgress(100);
 
         await trackMcpEvent(apiKey, "mcp_tool_called", {
           toolName: "analyze_conversation",
