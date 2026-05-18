@@ -87,7 +87,7 @@ ${
 <input form="f1" type="password" name="k" value="${k}" placeholder="clé d'accès" autocomplete="off"></p>
 
 <section><h2>1 · Découvrir des conversationId</h2>
-<form id="f1" method="post" action="eval/discover">
+<form id="f1" method="post" action="/eval/discover">
 <input type="hidden" name="k" value="${k}">
 <label>CSV (colonne <code>company_id</code>) OU userId séparés par virgules / sauts de ligne</label>
 <textarea name="input" placeholder="colle ici le CSV LGM, ou des userId 24-hex">${esc(
@@ -109,7 +109,7 @@ ${
 <section><h2>2 · Analyser (1 conv par requête — contrainte routeur Heroku 30 s)</h2>
 ${
   s.analyzeBlock ??
-  `<form method="post" action="eval/analyze">
+  `<form method="post" action="/eval/analyze">
 <input type="hidden" name="k" value="${k}">
 <label>conversationId séparés par virgules</label>
 <textarea name="ids" placeholder="id1, id2, id3 …"></textarea>
@@ -119,7 +119,7 @@ ${
 </section>
 
 <section><h2>3 · Diff (2 dernières analyses de chaque conv)</h2>
-<form method="post" action="eval/diff">
+<form method="post" action="/eval/diff">
 <input type="hidden" name="k" value="${k}">
 <button type="submit">Lancer le diff</button>
 </form>
@@ -500,7 +500,7 @@ evalRouter.post(
             msg: `Terminé — ${done}/${totalN} analysée(s). Passe à la section 3 pour le diff.`,
           },
           analyzeBlock: `<p class="muted">File vide. Relance une découverte ou colle de nouveaux ID.</p>
-<form method="post" action="eval/analyze"><input type="hidden" name="k" value="${esc(
+<form method="post" action="/eval/analyze"><input type="hidden" name="k" value="${esc(
             k,
           )}"><label>conversationId séparés par virgules</label>
 <textarea name="ids" placeholder="id1, id2 …"></textarea><button type="submit">Analyser</button></form>`,
@@ -538,7 +538,7 @@ evalRouter.post(
     const nDone = done + 1;
     const continueForm =
       rest.length > 0
-        ? `<form method="post" action="eval/analyze">
+        ? `<form method="post" action="/eval/analyze">
 <input type="hidden" name="k" value="${esc(k)}">
 <input type="hidden" name="ids" value="${esc(rest.join(","))}">
 <input type="hidden" name="total" value="${totalN}">
@@ -546,7 +546,7 @@ evalRouter.post(
 <button type="submit" autofocus>▶ Analyser la suivante (${rest.length} restante·s)</button>
 </form>`
         : `<p class="ok">File épuisée — ${nDone}/${totalN} traitée·s. Section 3 pour le diff.</p>
-<form method="post" action="eval/analyze"><input type="hidden" name="k" value="${esc(
+<form method="post" action="/eval/analyze"><input type="hidden" name="k" value="${esc(
             k,
           )}"><label>Nouvelle série</label><textarea name="ids"></textarea><button type="submit">Analyser</button></form>`;
 
