@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import express from "express";
 import { ObjectId } from "mongodb";
 import { getDb } from "./agents/db-explorer/mongoClient";
@@ -13,6 +12,7 @@ import {
 // Harness d'évaluation itérative d'analyze_conversation. Tout server-side :
 // formulaires HTML rendus par le serveur, zéro JS client. Voir spec
 // _bmad-output/planning-artifacts/conv-eval-harness-spec.md (rev. 3).
+// Accès libre (D4 : interne, POC-passthrough — aucune clé).
 
 const HEX24 = /^[a-f0-9]{24}$/i;
 const log = (parts: Record<string, unknown>): void => {
@@ -21,18 +21,6 @@ const log = (parts: Record<string, unknown>): void => {
       .map(([k, v]) => `${k}=${typeof v === "string" && /\s/.test(v) ? `"${v}"` : v}`)
       .join(" ")}`,
   );
-};
-
-// ---------- gate d'accès (POC, D4) ----------
-// EVAL_ACCESS_KEY doit être positionnée (fail closed). La clé est saisie dans
-// la page et réinjectée en hidden dans chaque formulaire.
-const gateConfigured = (): boolean => !!process.env.EVAL_ACCESS_KEY;
-const keyOk = (provided: string): boolean => {
-  const expected = process.env.EVAL_ACCESS_KEY || "";
-  if (!expected) return false;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
 
 // ---------- helpers HTML ----------
@@ -53,7 +41,7 @@ const PAGE_CSS = `
 body{max-width:980px;margin:1.5rem auto;padding:0 1rem;color:#1a1a1a}
 h1{font-size:1.3rem} h2{font-size:1.05rem;margin-top:2rem;border-bottom:1px solid #ddd;padding-bottom:.3rem}
 section{margin-bottom:1.5rem}
-textarea,input[type=number],input[type=password]{width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:.85rem}
+textarea,input[type=number]{width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:.85rem}
 textarea{min-height:5rem}
 button{background:#1a5;color:#fff;border:0;padding:.5rem 1rem;border-radius:4px;cursor:pointer;font-size:.9rem;margin-top:.5rem}
 .muted{color:#666;font-size:.85rem}
@@ -65,7 +53,6 @@ label{display:block;margin:.6rem 0 .15rem;font-size:.85rem;font-weight:600}
 `;
 
 interface PageState {
-  k: string;
   banner?: { kind: "err" | "ok"; msg: string };
   discoverOut?: string;
   analyzeBlock?: string;
@@ -73,7 +60,6 @@ interface PageState {
 }
 
 const page = (s: PageState): string => {
-  const k = esc(s.k);
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <title>Conv-Eval Harness</title><style>${PAGE_CSS}</style></head><body>
 <h1>🧪 Harness d'évaluation — analyze_conversation</h1>
@@ -83,16 +69,10 @@ ${
     ? `<p class="${s.banner.kind}">${esc(s.banner.msg)}</p>`
     : ""
 }
-<p><label>Clé d'accès (EVAL_ACCESS_KEY)</label>
-<input form="f1" type="password" name="k" value="${k}" placeholder="clé d'accès" autocomplete="off"></p>
-
 <section><h2>1 · Découvrir des conversationId</h2>
-<form id="f1" method="post" action="/eval/discover">
-<input type="hidden" name="k" value="${k}">
+<form method="post" action="/eval/discover">
 <label>CSV (colonne <code>company_id</code>) OU userId séparés par virgules / sauts de ligne</label>
-<textarea name="input" placeholder="colle ici le CSV LGM, ou des userId 24-hex">${esc(
-    "",
-  )}</textarea>
+<textarea name="input" placeholder="colle ici le CSV LGM, ou des userId 24-hex"></textarea>
 <label>Nombre de conversations par société</label>
 <input type="number" name="limit" value="50" min="1" max="200">
 <label><input type="checkbox" name="repliedOnly" value="1" checked> Seulement les fils où le lead a répondu (leadReplied:true)</label>
@@ -110,7 +90,6 @@ ${
 ${
   s.analyzeBlock ??
   `<form method="post" action="/eval/analyze">
-<input type="hidden" name="k" value="${k}">
 <label>conversationId séparés par virgules</label>
 <textarea name="ids" placeholder="id1, id2, id3 …"></textarea>
 <button type="submit">Analyser</button>
@@ -120,7 +99,6 @@ ${
 
 <section><h2>3 · Diff (2 dernières analyses de chaque conv)</h2>
 <form method="post" action="/eval/diff">
-<input type="hidden" name="k" value="${k}">
 <button type="submit">Lancer le diff</button>
 </form>
 ${s.diffBlock ?? ""}
@@ -352,59 +330,13 @@ const deltaCell = (p: number, c: number): string => {
 export const evalRouter = express.Router();
 evalRouter.use(express.urlencoded({ extended: false, limit: "2mb" }));
 
-const guard = (
-  req: express.Request,
-  res: express.Response,
-): string | null => {
-  if (!gateConfigured()) {
-    res
-      .status(503)
-      .send(
-        page({
-          k: "",
-          banner: {
-            kind: "err",
-            msg: "Harness désactivé : variable d'env EVAL_ACCESS_KEY non positionnée sur le serveur.",
-          },
-        }),
-      );
-    return null;
-  }
-  const k = String((req.body?.k ?? req.query?.k ?? "") as string);
-  if (!keyOk(k)) {
-    log({ event: "denied", path: req.path });
-    res.status(401).send(
-      page({
-        k: "",
-        banner: { kind: "err", msg: "Clé d'accès invalide ou manquante." },
-      }),
-    );
-    return null;
-  }
-  return k;
-};
-
-evalRouter.get("/eval", (req: express.Request, res: express.Response) => {
-  if (!gateConfigured()) {
-    res.status(503).send(
-      page({
-        k: "",
-        banner: {
-          kind: "err",
-          msg: "Harness désactivé : EVAL_ACCESS_KEY non positionnée sur le serveur.",
-        },
-      }),
-    );
-    return;
-  }
-  res.send(page({ k: "" }));
+evalRouter.get("/eval", (_req: express.Request, res: express.Response) => {
+  res.send(page({}));
 });
 
 evalRouter.post(
   "/eval/discover",
   async (req: express.Request, res: express.Response) => {
-    const k = guard(req, res);
-    if (k === null) return;
     try {
       const input = String(req.body?.input ?? "");
       const repliedOnly = !!req.body?.repliedOnly;
@@ -416,7 +348,6 @@ evalRouter.post(
       if (userIds.length === 0) {
         res.send(
           page({
-            k,
             banner: {
               kind: "err",
               msg: "Aucun userId 24-hex détecté (CSV colonne company_id, ou liste d'ID).",
@@ -454,7 +385,6 @@ evalRouter.post(
       });
       res.send(
         page({
-          k,
           banner: {
             kind: "ok",
             msg: `${found.length} conversationId pour ${userIds.length} société(s).`,
@@ -466,7 +396,6 @@ evalRouter.post(
       log({ event: "discover_error", msg: e instanceof Error ? e.message : "?" });
       res.send(
         page({
-          k,
           banner: {
             kind: "err",
             msg: `Erreur découverte : ${e instanceof Error ? e.message : "inconnue"}`,
@@ -480,9 +409,6 @@ evalRouter.post(
 evalRouter.post(
   "/eval/analyze",
   async (req: express.Request, res: express.Response) => {
-    const k = guard(req, res);
-    if (k === null) return;
-
     const ids = parseConvIds(String(req.body?.ids ?? ""));
     const total = parseInt(String(req.body?.total ?? ""), 10);
     const totalN = Number.isFinite(total) && total > 0 ? total : ids.length;
@@ -494,15 +420,12 @@ evalRouter.post(
       void analyzed;
       res.send(
         page({
-          k,
           banner: {
             kind: "ok",
             msg: `Terminé — ${done}/${totalN} analysée(s). Passe à la section 3 pour le diff.`,
           },
           analyzeBlock: `<p class="muted">File vide. Relance une découverte ou colle de nouveaux ID.</p>
-<form method="post" action="/eval/analyze"><input type="hidden" name="k" value="${esc(
-            k,
-          )}"><label>conversationId séparés par virgules</label>
+<form method="post" action="/eval/analyze"><label>conversationId séparés par virgules</label>
 <textarea name="ids" placeholder="id1, id2 …"></textarea><button type="submit">Analyser</button></form>`,
         }),
       );
@@ -539,20 +462,16 @@ evalRouter.post(
     const continueForm =
       rest.length > 0
         ? `<form method="post" action="/eval/analyze">
-<input type="hidden" name="k" value="${esc(k)}">
 <input type="hidden" name="ids" value="${esc(rest.join(","))}">
 <input type="hidden" name="total" value="${totalN}">
 <input type="hidden" name="done" value="${nDone}">
 <button type="submit" autofocus>▶ Analyser la suivante (${rest.length} restante·s)</button>
 </form>`
         : `<p class="ok">File épuisée — ${nDone}/${totalN} traitée·s. Section 3 pour le diff.</p>
-<form method="post" action="/eval/analyze"><input type="hidden" name="k" value="${esc(
-            k,
-          )}"><label>Nouvelle série</label><textarea name="ids"></textarea><button type="submit">Analyser</button></form>`;
+<form method="post" action="/eval/analyze"><label>Nouvelle série</label><textarea name="ids"></textarea><button type="submit">Analyser</button></form>`;
 
     res.send(
       page({
-        k,
         banner: {
           kind: sev,
           msg: `${resultMsg} — progression ${nDone}/${totalN}`,
@@ -565,9 +484,7 @@ evalRouter.post(
 
 evalRouter.post(
   "/eval/diff",
-  async (req: express.Request, res: express.Response) => {
-    const k = guard(req, res);
-    if (k === null) return;
+  async (_req: express.Request, res: express.Response) => {
     try {
       const convs = await listConversationsWithCounts();
       const eligible = convs.filter((c) => c.count >= 2);
@@ -669,7 +586,6 @@ evalRouter.post(
 
       res.send(
         page({
-          k,
           banner: {
             kind: nReg > 0 ? "err" : "ok",
             msg: "Diff terminé.",
@@ -689,7 +605,6 @@ evalRouter.post(
     } catch (e) {
       res.send(
         page({
-          k,
           banner: {
             kind: "err",
             msg: `Erreur diff : ${e instanceof Error ? e.message : "inconnue"}`,
