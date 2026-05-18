@@ -44,14 +44,48 @@ export interface AnalysisRow {
   };
 }
 
+export interface ReplyRowApi {
+  id: string;
+  conversation_id: string;
+  prompt_name: string;
+  reply_text: string;
+  context: Record<string, unknown>;
+  is_favorite: boolean;
+  created_at: string;
+}
+
 export interface ConvDetail {
   conversation_id: string;
   is_favorite: boolean;
   transcript: string[];
   analyses: AnalysisRow[];
+  replies: ReplyRowApi[];
 }
 
+export interface GenerateReplyResp {
+  conversationId: string;
+  replyId: string | null;
+  promptName: string;
+  status: "ok" | "skipped";
+  reason?: string;
+  replyText: string | null;
+  hasFavorite: boolean;
+  vsFavorite: VsCanon;
+}
+
+export interface ReplyListItem {
+  id: string;
+  conversation_id: string;
+  prompt_name: string;
+  is_favorite: boolean;
+  created_at: string;
+  preview: string;
+}
+
+export type PromptKind = "analysis" | "reply";
+
 export interface PromptListItem {
+  kind: PromptKind;
   name: string;
   is_active: boolean;
   created_at: string;

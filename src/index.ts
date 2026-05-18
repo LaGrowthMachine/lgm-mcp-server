@@ -3,6 +3,7 @@ import express from "express";
 import axios from "axios";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { IncomingMessage } from "node:http";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -17,6 +18,48 @@ import { ensureSchema } from "./eval/db";
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const TRANSPORT = process.env.LGM_MCP_TRANSPORT || "http";
 
+// Basic Auth navigateur SCOPPÉ à la web app d'éval (/eval + /api/eval)
+// uniquement. /mcp, /health, /oauth, /.well-known restent OUVERTS — sinon
+// on casse tous les clients MCP et les probes Heroku. Identifiants via
+// config vars (défauts demandés : lgm / tech@env25).
+// Actif uniquement sur Heroku (variable DYNO présente sur les dynos) — JAMAIS
+// en dev local. Forçable via EVAL_BASIC_AUTH=1 si besoin de tester le gate.
+const EVAL_AUTH_ENABLED =
+  !!process.env.DYNO || process.env.EVAL_BASIC_AUTH === "1";
+const EVAL_AUTH_USER = process.env.EVAL_BASIC_AUTH_USER || "lgm";
+const EVAL_AUTH_PASS = process.env.EVAL_BASIC_AUTH_PASS || "tech@env25";
+
+const safeEq = (a: string, b: string): boolean => {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+};
+
+const evalBasicAuth = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+): void => {
+  if (!EVAL_AUTH_ENABLED) {
+    next();
+    return;
+  }
+  const h = req.headers.authorization || "";
+  if (h.startsWith("Basic ")) {
+    const [user, ...rest] = Buffer.from(h.slice(6), "base64")
+      .toString("utf8")
+      .split(":");
+    if (safeEq(user, EVAL_AUTH_USER) && safeEq(rest.join(":"), EVAL_AUTH_PASS)) {
+      next();
+      return;
+    }
+  }
+  res
+    .set("WWW-Authenticate", 'Basic realm="LGM eval", charset="UTF-8"')
+    .status(401)
+    .send("Authentication required");
+};
+
 const startHttpServer = async () => {
   const app = express();
 
@@ -24,6 +67,7 @@ const startHttpServer = async () => {
   // path, zéro 2e système. API sous /api/eval (parser 4 Mo propre, monté
   // AVANT le json global 100 Ko), UI React buildée servie en statique sous
   // /eval. Le MCP (/mcp), /health, /oauth restent inchangés.
+  app.use(["/api/eval", "/eval"], evalBasicAuth);
   app.use("/api/eval", evalRouter);
   // Schéma + seed du prompt par défaut, non-bloquant : si Postgres est
   // indisponible le MCP démarre quand même, seules les routes /api/eval

@@ -102,3 +102,75 @@ export const diffAnalyses = (a: unknown, b: unknown): DiffResult => {
 
   return { verdict: changes.length === 0 ? "match" : "diff", changes };
 };
+
+// ---------- diff réponse (texte libre) ----------
+// À temperature:0 le texte est reproductible : l'égalité normalisée
+// (whitespace tolérant, casse significative) suffit comme détection de
+// régression quand on rejoue une nouvelle version de prompt. Sinon on
+// renvoie un diff mot-à-mot (LCS) pour verdict humain.
+
+const normalizeReply = (t: string): string =>
+  t
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((l) => l.trim().replace(/[ \t]+/g, " "))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+const wordDiff = (a: string, b: string): string[] => {
+  const A = a.split(/\s+/).filter(Boolean);
+  const B = b.split(/\s+/).filter(Boolean);
+  const n = A.length;
+  const m = B.length;
+  const lcs: number[][] = Array.from({ length: n + 1 }, () =>
+    new Array<number>(m + 1).fill(0),
+  );
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      lcs[i][j] =
+        A[i] === B[j]
+          ? lcs[i + 1][j + 1] + 1
+          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+
+  const changes: string[] = [];
+  let i = 0;
+  let j = 0;
+  let rem: string[] = [];
+  let add: string[] = [];
+  const flush = () => {
+    if (rem.length) changes.push(`− ${rem.join(" ")}`);
+    if (add.length) changes.push(`+ ${add.join(" ")}`);
+    rem = [];
+    add = [];
+  };
+  while (i < n && j < m) {
+    if (A[i] === B[j]) {
+      flush();
+      i++;
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      rem.push(A[i++]);
+    } else {
+      add.push(B[j++]);
+    }
+  }
+  while (i < n) rem.push(A[i++]);
+  while (j < m) add.push(B[j++]);
+  flush();
+  return changes.slice(0, 40);
+};
+
+// `canonText` = réponse favoritée (référence), `newText` = nouvelle réponse.
+export const diffReplies = (
+  canonText: string | null | undefined,
+  newText: string | null | undefined,
+): DiffResult => {
+  if (canonText == null || newText == null) {
+    return { verdict: "incomparable", changes: ["pas encore de référence"] };
+  }
+  const a = normalizeReply(canonText);
+  const b = normalizeReply(newText);
+  if (a === b) return { verdict: "match", changes: [] };
+  return { verdict: "diff", changes: wordDiff(a, b) };
+};

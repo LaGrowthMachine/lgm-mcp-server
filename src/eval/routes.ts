@@ -2,8 +2,12 @@ import express from "express";
 import { ObjectId } from "mongodb";
 import { getDb } from "../agents/db-explorer/mongoClient";
 import { analyzeConversationWithDbPrompt } from "./analyzer";
-import { diffAnalyses } from "./diff";
+import { generateReply } from "./replyGenerator";
+import { diffAnalyses, diffReplies } from "./diff";
 import * as db from "./db";
+
+const asKind = (v: unknown): db.PromptKind =>
+  v === "reply" ? "reply" : "analysis";
 
 const HEX24 = /^[a-f0-9]{24}$/i;
 
@@ -210,23 +214,137 @@ evalRouter.post(
   }),
 );
 
-// ---------- 4 · Prompts (CRUD + version + actif) ----------
+// ---------- 4 · Réponses (génération 1 conv / requête, 30s-safe) ----------
+// Pas de tool MCP : la génération de réponse vit uniquement ici (eval).
+evalRouter.post(
+  "/reply/:id",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!HEX24.test(id)) {
+      res.status(400).json({ error: "conversationId invalide" });
+      return;
+    }
+    const gen = await generateReply(id);
+    await db.upsertConversation(id, gen.conversation);
+
+    if (gen.result.status === "skipped") {
+      res.json({
+        conversationId: id,
+        replyId: null,
+        promptName: gen.promptName,
+        status: "skipped",
+        reason: gen.result.reason,
+        replyText: null,
+        hasFavorite: false,
+        vsFavorite: { verdict: "incomparable", changes: [gen.result.reason] },
+      });
+      return;
+    }
+
+    // Référence AVANT upsert : la favorite courante (baseline validée). Si
+    // c'est le même slot (conv,prompt) on capture bien le texte pré-écrasement.
+    const favBefore = await db.getFavoriteReply(id);
+    const inserted = await db.upsertReply({
+      conversationId: id,
+      promptName: gen.promptName,
+      replyText: gen.result.replyText,
+      context: gen.result.context,
+    });
+    const vsFavorite = diffReplies(
+      favBefore?.reply_text ?? null,
+      gen.result.replyText,
+    );
+
+    res.json({
+      conversationId: id,
+      replyId: inserted.id,
+      promptName: gen.promptName,
+      status: "ok",
+      replyText: gen.result.replyText,
+      hasFavorite: !!favBefore,
+      vsFavorite,
+    });
+  }),
+);
+
+// Input batch = favoris de conversation (parité avec /analyze/favorites/ids).
+evalRouter.get(
+  "/reply/favorites/ids",
+  wrap(async (_req, res) => {
+    res.json({ ids: await db.favoriteConversationIds() });
+  }),
+);
+
+evalRouter.get(
+  "/replies",
+  wrap(async (req, res) => {
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+    const pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(String(req.query.pageSize ?? "30"), 10) || 30),
+    );
+    res.json(await db.listReplies(page, pageSize));
+  }),
+);
+
+evalRouter.post(
+  "/replies/:id/favorite",
+  wrap(async (req, res) => {
+    await db.setFavoriteReply(String(req.params.id), req.body?.value !== false);
+    res.json({ ok: true });
+  }),
+);
+
+evalRouter.delete(
+  "/replies/:id",
+  wrap(async (req, res) => {
+    await db.deleteReply(String(req.params.id));
+    res.json({ ok: true });
+  }),
+);
+
+evalRouter.post(
+  "/replies/favorite-batch",
+  wrap(async (req, res) => {
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    for (const id of ids) await db.setFavoriteReply(String(id), true);
+    res.json({ ok: true, n: ids.length });
+  }),
+);
+
+evalRouter.post(
+  "/replies/delete-batch",
+  wrap(async (req, res) => {
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    for (const id of ids) await db.deleteReply(String(id));
+    res.json({ ok: true, n: ids.length });
+  }),
+);
+
+// ---------- 5 · Prompts (CRUD + version + actif, par famille `kind`) ----------
 evalRouter.get(
   "/prompts",
-  wrap(async (_req, res) => {
+  wrap(async (req, res) => {
+    const kind = asKind(req.query.kind);
     const [list, active, next] = await Promise.all([
-      db.listPrompts(),
-      db.getActivePrompt(),
-      db.nextPromptName(),
+      db.listPrompts(kind),
+      db.getActivePrompt(kind),
+      db.nextPromptName(kind),
     ]);
-    res.json({ prompts: list, active: active?.name ?? null, nextName: next });
+    res.json({
+      kind,
+      prompts: list,
+      active: active?.name ?? null,
+      nextName: next,
+    });
   }),
 );
 
 evalRouter.get(
   "/prompts/:name",
   wrap(async (req, res) => {
-    const p = await db.getPrompt(String(req.params.name));
+    const kind = asKind(req.query.kind);
+    const p = await db.getPrompt(String(req.params.name), kind);
     if (!p) {
       res.status(404).json({ error: "prompt inconnu" });
       return;
@@ -238,17 +356,18 @@ evalRouter.get(
 evalRouter.post(
   "/prompts",
   wrap(async (req, res) => {
+    const kind = asKind(req.body?.kind);
     const name = String(req.body?.name ?? "").trim();
     const body = String(req.body?.body ?? "");
     if (!name || !body) {
       res.status(400).json({ error: "name et body requis" });
       return;
     }
-    if (await db.getPrompt(name)) {
+    if (await db.getPrompt(name, kind)) {
       res.status(409).json({ error: `le prompt "${name}" existe déjà` });
       return;
     }
-    await db.createPrompt(name, body);
+    await db.createPrompt(name, body, kind);
     res.json({ ok: true, name });
   }),
 );
@@ -256,12 +375,13 @@ evalRouter.post(
 evalRouter.put(
   "/prompts/:name",
   wrap(async (req, res) => {
+    const kind = asKind(req.body?.kind ?? req.query.kind);
     const name = String(req.params.name);
-    if (!(await db.getPrompt(name))) {
+    if (!(await db.getPrompt(name, kind))) {
       res.status(404).json({ error: "prompt inconnu" });
       return;
     }
-    await db.updatePrompt(name, String(req.body?.body ?? ""));
+    await db.updatePrompt(name, String(req.body?.body ?? ""), kind);
     res.json({ ok: true });
   }),
 );
@@ -269,7 +389,7 @@ evalRouter.put(
 evalRouter.delete(
   "/prompts/:name",
   wrap(async (req, res) => {
-    await db.deletePrompt(String(req.params.name));
+    await db.deletePrompt(String(req.params.name), asKind(req.query.kind));
     res.json({ ok: true });
   }),
 );
@@ -277,12 +397,13 @@ evalRouter.delete(
 evalRouter.post(
   "/prompts/:name/activate",
   wrap(async (req, res) => {
+    const kind = asKind(req.body?.kind ?? req.query.kind);
     const name = String(req.params.name);
-    if (!(await db.getPrompt(name))) {
+    if (!(await db.getPrompt(name, kind))) {
       res.status(404).json({ error: "prompt inconnu" });
       return;
     }
-    await db.activatePrompt(name);
+    await db.activatePrompt(name, kind);
     res.json({ ok: true });
   }),
 );

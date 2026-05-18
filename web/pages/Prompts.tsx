@@ -9,11 +9,13 @@ import {
   Input,
   Popconfirm,
   App,
+  Segmented,
 } from "antd";
-import { http, PromptListItem } from "../api";
+import { http, PromptListItem, PromptKind } from "../api";
 
 export function Prompts() {
   const { message } = App.useApp();
+  const [kind, setKind] = useState<PromptKind>("analysis");
   const [list, setList] = useState<PromptListItem[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [nextName, setNextName] = useState("1");
@@ -28,14 +30,14 @@ export function Prompts() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await http.get("/prompts");
+      const { data } = await http.get("/prompts", { params: { kind } });
       setList(data.prompts);
       setActive(data.active);
       setNextName(data.nextName);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [kind]);
 
   useEffect(() => {
     load();
@@ -53,7 +55,7 @@ export function Prompts() {
   };
 
   const openEdit = async (name: string) => {
-    const { data } = await http.get(`/prompts/${name}`);
+    const { data } = await http.get(`/prompts/${name}`, { params: { kind } });
     setEditMode("edit");
     setFormName(name);
     setFormBody(data.body);
@@ -64,10 +66,14 @@ export function Prompts() {
     setSaving(true);
     try {
       if (editMode === "create") {
-        await http.post("/prompts", { name: formName.trim(), body: formBody });
+        await http.post("/prompts", {
+          name: formName.trim(),
+          body: formBody,
+          kind,
+        });
         message.success(`Prompt "${formName}" créé`);
       } else {
-        await http.put(`/prompts/${formName}`, { body: formBody });
+        await http.put(`/prompts/${formName}`, { body: formBody, kind });
         message.success(`Prompt "${formName}" mis à jour`);
       }
       setEditOpen(false);
@@ -80,14 +86,14 @@ export function Prompts() {
   };
 
   const activate = async (name: string) => {
-    await http.post(`/prompts/${name}/activate`);
+    await http.post(`/prompts/${name}/activate`, { kind });
     message.success(`"${name}" est le prompt actif`);
     load();
   };
 
   const del = async (name: string) => {
     try {
-      await http.delete(`/prompts/${name}`);
+      await http.delete(`/prompts/${name}`, { params: { kind } });
       message.success("Prompt supprimé");
       load();
     } catch (e: any) {
@@ -105,11 +111,30 @@ export function Prompts() {
           <Typography.Title level={3} style={{ marginTop: 0 }}>
             Prompts
           </Typography.Title>
+          <Segmented
+            value={kind}
+            onChange={(v) => setKind(v as PromptKind)}
+            options={[
+              { label: "Analyse", value: "analysis" },
+              { label: "Réponse", value: "reply" },
+            ]}
+            style={{ marginBottom: 8 }}
+          />
           <Typography.Paragraph type="secondary" style={{ maxWidth: 640 }}>
-            Le prompt actif est utilisé par la page Analyse. La clé est le{" "}
-            <strong>nom = version</strong> (prérempli au max+1). Le schéma de
-            sortie reste figé en code (contrat déterministe) — ici on n'itère
-            que le texte d'instructions.
+            {kind === "analysis" ? (
+              <>
+                Le prompt <strong>analyse</strong> actif est utilisé par la page
+                Analyse. Le schéma de sortie reste figé en code (contrat
+                déterministe) — ici on n'itère que le texte d'instructions.
+              </>
+            ) : (
+              <>
+                Le prompt <strong>réponse</strong> actif est utilisé par la page
+                Réponses et le bouton « Générer une réponse » d'une conv. v1 =
+                playbook fourni par le DG. La clé est le{" "}
+                <strong>nom = version</strong> (prérempli au max+1).
+              </>
+            )}
           </Typography.Paragraph>
         </div>
         <Button type="primary" onClick={openCreate}>

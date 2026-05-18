@@ -77,3 +77,44 @@ export const inferStructured = async <T>(args: InferStructuredArgs): Promise<T> 
   }
   return toolUses[toolUses.length - 1].input as T;
 };
+
+export interface InferTextArgs {
+  systemPrompt: string;
+  userMessage: string;
+  maxTokens?: number;
+}
+
+// Complétion texte libre (pas de tool forcé) — utilisée par le harness
+// d'éval pour la génération de réponse. temperature:0 comme inferStructured :
+// le texte est alors reproductible, ce qui rend la détection de régression
+// vs réponse favoritée (diff texte) significative.
+export const inferText = async (args: InferTextArgs): Promise<string> => {
+  let response: Anthropic.Message;
+  try {
+    response = await getClient().messages.create(
+      {
+        model: DEFAULT_MODEL,
+        max_tokens: args.maxTokens ?? 1500,
+        temperature: 0,
+        system: args.systemPrompt,
+        messages: [{ role: "user", content: args.userMessage }],
+      },
+      { timeout: REQUEST_TIMEOUT_MS },
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Anthropic call failed: ${msg}`);
+  }
+
+  const text = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+  if (!text) {
+    throw new Error(
+      `Inference returned no text (stop_reason=${response.stop_reason}).`,
+    );
+  }
+  return text;
+};

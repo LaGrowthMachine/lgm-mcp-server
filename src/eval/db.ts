@@ -3,6 +3,15 @@ import {
   buildClassifierSystemPrompt,
   CONVERSATION_CLASSIFIER_VERSION,
 } from "../agents/conversation-analyzer/conversationClassifier";
+import {
+  CODE_DEFAULT_REPLY_PROMPT_BODY,
+  CODE_DEFAULT_REPLY_PROMPT_NAME,
+} from "./replyPromptDefault";
+
+// 2 familles de prompts versionnés indépendamment : 'analysis' (classifier)
+// et 'reply' (génération de réponse, playbook DG). Même mécanique CRUD /
+// version / actif, scoppée par `kind`.
+export type PromptKind = "analysis" | "reply";
 
 // Postgres : add-on Heroku (DATABASE_URL) en prod, docker local sinon.
 // EVAL_DATABASE_URL prend le pas si défini (override explicite).
@@ -40,8 +49,6 @@ export const ensureSchema = async (): Promise<void> => {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS prompts_one_active
-      ON prompts ((is_active)) WHERE is_active;
 
     CREATE TABLE IF NOT EXISTS conversations (
       conversation_id TEXT PRIMARY KEY,
@@ -65,26 +72,80 @@ export const ensureSchema = async (): Promise<void> => {
       ON analyses (conversation_id, created_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS analyses_one_canon
       ON analyses (conversation_id) WHERE is_canon;
+
+    -- Réponses générées : 1 ligne par (conv, version de prompt). Régénérer
+    -- avec la même version écrase (cf. upsertReply). 1 seule favorite/conv
+    -- (= la baseline validée, équivalent du canon des analyses).
+    CREATE TABLE IF NOT EXISTS replies (
+      id              BIGSERIAL PRIMARY KEY,
+      conversation_id TEXT NOT NULL
+        REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+      prompt_name     TEXT NOT NULL,
+      reply_text      TEXT NOT NULL,
+      context         JSONB NOT NULL,
+      is_favorite     BOOLEAN NOT NULL DEFAULT false,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS replies_conv_prompt
+      ON replies (conversation_id, prompt_name);
+    CREATE UNIQUE INDEX IF NOT EXISTS replies_one_favorite
+      ON replies (conversation_id) WHERE is_favorite;
+    CREATE INDEX IF NOT EXISTS replies_conv
+      ON replies (conversation_id, created_at DESC);
   `);
 
-  // Seed du défaut si la table prompts est vide.
-  const { rows } = await p.query<{ n: string }>(
-    "SELECT count(*)::text AS n FROM prompts",
+  // Migration idempotente : ajout de `kind` (familles analysis/reply) et
+  // passage de la PK prompts (name) → (kind, name) pour que "v1" coexiste
+  // dans les 2 familles. L'ancien index "un seul actif" devient par-kind.
+  await p.query(`
+    ALTER TABLE prompts
+      ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'analysis';
+    DROP INDEX IF EXISTS prompts_one_active;
+    CREATE UNIQUE INDEX IF NOT EXISTS prompts_one_active_per_kind
+      ON prompts (kind) WHERE is_active;
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'prompts_pkey' AND array_length(conkey, 1) = 2
+      ) THEN
+        ALTER TABLE prompts DROP CONSTRAINT IF EXISTS prompts_pkey;
+        ALTER TABLE prompts ADD PRIMARY KEY (kind, name);
+      END IF;
+    END $$;
+  `);
+
+  // Seed par famille : défaut analysis (classifier) + défaut reply (playbook
+  // DG), chacun actif si sa famille est vide.
+  const seed = async (
+    kind: PromptKind,
+    name: string,
+    body: string,
+  ): Promise<void> => {
+    const { rows } = await p.query<{ n: string }>(
+      "SELECT count(*)::text AS n FROM prompts WHERE kind = $1",
+      [kind],
+    );
+    if (rows[0].n === "0") {
+      await p.query(
+        `INSERT INTO prompts (kind, name, body, is_active)
+         VALUES ($1, $2, $3, true)`,
+        [kind, name, body],
+      );
+      console.error(`[db] seed prompt ${kind} "${name}" (actif)`);
+    }
+  };
+  await seed("analysis", CODE_DEFAULT_PROMPT_NAME, CODE_DEFAULT_PROMPT_BODY);
+  await seed(
+    "reply",
+    CODE_DEFAULT_REPLY_PROMPT_NAME,
+    CODE_DEFAULT_REPLY_PROMPT_BODY,
   );
-  if (rows[0].n === "0") {
-    await p.query(
-      `INSERT INTO prompts (name, body, is_active)
-       VALUES ($1, $2, true)`,
-      [CODE_DEFAULT_PROMPT_NAME, CODE_DEFAULT_PROMPT_BODY],
-    );
-    console.error(
-      `[db] seed prompt par défaut "${CODE_DEFAULT_PROMPT_NAME}" (actif)`,
-    );
-  }
 };
 
 // ---------- prompts ----------
 export interface PromptRow {
+  kind: PromptKind;
   name: string;
   body: string;
   is_active: boolean;
@@ -92,37 +153,47 @@ export interface PromptRow {
   updated_at: string;
 }
 
-export const listPrompts = async (): Promise<
-  Omit<PromptRow, "body">[]
-> => {
+// `kind` par défaut 'analysis' : conserve la compat des appelants existants
+// (analyzer.ts appelle getActivePrompt() sans argument).
+export const listPrompts = async (
+  kind: PromptKind = "analysis",
+): Promise<Omit<PromptRow, "body">[]> => {
   const { rows } = await getPool().query(
-    `SELECT name, is_active, created_at, updated_at
-     FROM prompts ORDER BY created_at DESC`,
+    `SELECT kind, name, is_active, created_at, updated_at
+     FROM prompts WHERE kind = $1 ORDER BY created_at DESC`,
+    [kind],
   );
   return rows;
 };
 
 export const getPrompt = async (
   name: string,
+  kind: PromptKind = "analysis",
 ): Promise<PromptRow | null> => {
   const { rows } = await getPool().query<PromptRow>(
-    "SELECT * FROM prompts WHERE name = $1",
-    [name],
+    "SELECT * FROM prompts WHERE kind = $1 AND name = $2",
+    [kind, name],
   );
   return rows[0] ?? null;
 };
 
-export const getActivePrompt = async (): Promise<PromptRow | null> => {
+export const getActivePrompt = async (
+  kind: PromptKind = "analysis",
+): Promise<PromptRow | null> => {
   const { rows } = await getPool().query<PromptRow>(
-    "SELECT * FROM prompts WHERE is_active LIMIT 1",
+    "SELECT * FROM prompts WHERE kind = $1 AND is_active LIMIT 1",
+    [kind],
   );
   return rows[0] ?? null;
 };
 
-// Nom suivant : max(nom numérique) + 1, défaut "1".
-export const nextPromptName = async (): Promise<string> => {
+// Nom suivant : max(nom numérique) + 1 dans la famille, défaut "1".
+export const nextPromptName = async (
+  kind: PromptKind = "analysis",
+): Promise<string> => {
   const { rows } = await getPool().query<{ name: string }>(
-    "SELECT name FROM prompts",
+    "SELECT name FROM prompts WHERE kind = $1",
+    [kind],
   );
   let max = 0;
   for (const r of rows) {
@@ -135,35 +206,49 @@ export const nextPromptName = async (): Promise<string> => {
 export const createPrompt = async (
   name: string,
   body: string,
+  kind: PromptKind = "analysis",
 ): Promise<void> => {
   await getPool().query(
-    "INSERT INTO prompts (name, body) VALUES ($1, $2)",
-    [name, body],
+    "INSERT INTO prompts (kind, name, body) VALUES ($1, $2, $3)",
+    [kind, name, body],
   );
 };
 
 export const updatePrompt = async (
   name: string,
   body: string,
+  kind: PromptKind = "analysis",
 ): Promise<void> => {
   await getPool().query(
-    "UPDATE prompts SET body = $2, updated_at = now() WHERE name = $1",
-    [name, body],
+    "UPDATE prompts SET body = $3, updated_at = now() WHERE kind = $1 AND name = $2",
+    [kind, name, body],
   );
 };
 
-export const deletePrompt = async (name: string): Promise<void> => {
-  await getPool().query("DELETE FROM prompts WHERE name = $1", [name]);
+export const deletePrompt = async (
+  name: string,
+  kind: PromptKind = "analysis",
+): Promise<void> => {
+  await getPool().query("DELETE FROM prompts WHERE kind = $1 AND name = $2", [
+    kind,
+    name,
+  ]);
 };
 
-export const activatePrompt = async (name: string): Promise<void> => {
+export const activatePrompt = async (
+  name: string,
+  kind: PromptKind = "analysis",
+): Promise<void> => {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    await client.query("UPDATE prompts SET is_active = false WHERE is_active");
     await client.query(
-      "UPDATE prompts SET is_active = true, updated_at = now() WHERE name = $1",
-      [name],
+      "UPDATE prompts SET is_active = false WHERE kind = $1 AND is_active",
+      [kind],
+    );
+    await client.query(
+      "UPDATE prompts SET is_active = true, updated_at = now() WHERE kind = $1 AND name = $2",
+      [kind, name],
     );
     await client.query("COMMIT");
   } catch (e) {
@@ -264,6 +349,7 @@ export const getConversationDetail = async (
   is_favorite: boolean;
   transcript: string[];
   analyses: AnalysisRow[];
+  replies: ReplyRow[];
 } | null> => {
   const p = getPool();
   const c = await p.query(
@@ -276,11 +362,19 @@ export const getConversationDetail = async (
      FROM analyses WHERE conversation_id = $1 ORDER BY created_at DESC`,
     [conversationId],
   );
+  const r = await p.query<ReplyRow>(
+    `SELECT id::text AS id, conversation_id, prompt_name, reply_text,
+            context, is_favorite, created_at
+     FROM replies WHERE conversation_id = $1
+     ORDER BY is_favorite DESC, created_at DESC`,
+    [conversationId],
+  );
   return {
     conversation_id: c.rows[0].conversation_id,
     is_favorite: c.rows[0].is_favorite,
     transcript: c.rows[0].transcript,
     analyses: a.rows,
+    replies: r.rows,
   };
 };
 
@@ -355,4 +449,129 @@ export const getCanonAnalysis = async (
     [conversationId],
   );
   return rows[0] ?? null;
+};
+
+// ---------- réponses ----------
+export interface ReplyRow {
+  id: string;
+  conversation_id: string;
+  prompt_name: string;
+  reply_text: string;
+  context: unknown;
+  is_favorite: boolean;
+  created_at: string;
+}
+
+// 1 réponse par (conv, version de prompt). Régénérer avec la même version
+// écrase texte + contexte (la favorite éventuelle du slot est conservée).
+export const upsertReply = async (args: {
+  conversationId: string;
+  promptName: string;
+  replyText: string;
+  context: unknown;
+}): Promise<{ id: string }> => {
+  const { rows } = await getPool().query<{ id: string }>(
+    `INSERT INTO replies (conversation_id, prompt_name, reply_text, context)
+     VALUES ($1, $2, $3, $4::jsonb)
+     ON CONFLICT (conversation_id, prompt_name)
+     DO UPDATE SET reply_text = EXCLUDED.reply_text,
+                   context    = EXCLUDED.context,
+                   created_at = now()
+     RETURNING id::text AS id`,
+    [
+      args.conversationId,
+      args.promptName,
+      args.replyText,
+      JSON.stringify(args.context ?? {}),
+    ],
+  );
+  return rows[0];
+};
+
+// Réponse favoritée d'une conv = baseline de référence pour le diff batch.
+export const getFavoriteReply = async (
+  conversationId: string,
+): Promise<ReplyRow | null> => {
+  const { rows } = await getPool().query<ReplyRow>(
+    `SELECT id::text AS id, conversation_id, prompt_name, reply_text,
+            context, is_favorite, created_at
+     FROM replies WHERE conversation_id = $1 AND is_favorite LIMIT 1`,
+    [conversationId],
+  );
+  return rows[0] ?? null;
+};
+
+// (Dé)favorite une réponse. value=true ⇒ déstitue l'ancienne favorite de la
+// même conv (1 seule favorite/conv). value=false ⇒ retire juste celle-ci.
+export const setFavoriteReply = async (
+  replyId: string,
+  value: boolean,
+): Promise<void> => {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<{ conversation_id: string }>(
+      "SELECT conversation_id FROM replies WHERE id = $1",
+      [replyId],
+    );
+    if (rows.length === 0) {
+      await client.query("ROLLBACK");
+      return;
+    }
+    if (value) {
+      await client.query(
+        "UPDATE replies SET is_favorite = false WHERE conversation_id = $1 AND is_favorite",
+        [rows[0].conversation_id],
+      );
+      await client.query(
+        "UPDATE replies SET is_favorite = true WHERE id = $1",
+        [replyId],
+      );
+    } else {
+      await client.query(
+        "UPDATE replies SET is_favorite = false WHERE id = $1",
+        [replyId],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+};
+
+export const deleteReply = async (replyId: string): Promise<void> => {
+  await getPool().query("DELETE FROM replies WHERE id = $1", [replyId]);
+};
+
+// Liste globale des réponses (vue liste : clic → renvoie sur la conv).
+export interface ReplyListRow {
+  id: string;
+  conversation_id: string;
+  prompt_name: string;
+  is_favorite: boolean;
+  created_at: string;
+  preview: string;
+}
+
+export const listReplies = async (
+  page: number,
+  pageSize: number,
+): Promise<{ rows: ReplyListRow[]; total: number }> => {
+  const offset = (page - 1) * pageSize;
+  const p = getPool();
+  const totalRes = await p.query<{ n: string }>(
+    "SELECT count(*)::text AS n FROM replies",
+  );
+  const { rows } = await p.query<ReplyListRow>(
+    `SELECT id::text AS id, conversation_id, prompt_name, is_favorite,
+            created_at, left(reply_text, 160) AS preview
+     FROM replies
+     ORDER BY created_at DESC
+     LIMIT $1 OFFSET $2`,
+    [pageSize, offset],
+  );
+  return { rows, total: parseInt(totalRes.rows[0].n, 10) };
 };

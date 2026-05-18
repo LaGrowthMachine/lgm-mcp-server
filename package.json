@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc && npm run copy-doctrine && npm run build:web",
     "heroku-postbuild": "tsc && npm run copy-doctrine && npm run build:web",
-    "copy-doctrine": "cp src/agents/db-explorer/SKILL.md src/agents/db-explorer/reference.md dist/agents/db-explorer/",
+    "copy-doctrine": "cp src/agents/db-explorer/SKILL.md src/agents/db-explorer/reference.md dist/agents/db-explorer/ && cp src/eval/replyPlaybook.md dist/eval/",
     "build:web": "cd web && npm install --include=dev --no-audit --no-fund && npm run build",
     "start": "node dist/index.js",
     "start:stdio": "LGM_MCP_TRANSPORT=stdio node dist/index.js",
