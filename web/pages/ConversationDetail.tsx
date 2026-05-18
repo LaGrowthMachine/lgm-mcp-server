@@ -19,27 +19,43 @@ import {
 import { Segmented } from "antd";
 import { useParams, useNavigate } from "react-router-dom";
 import { http, ConvDetail, ReplyRowApi, AnalysisRow } from "../api";
-import { diffLines } from "../lineDiff";
+import { diffLines, DiffLine } from "../lineDiff";
 
+// JSON complet (mode « brut »).
 const analysisJson = (a: AnalysisRow): string =>
+  JSON.stringify((a.payload as any)?.analysis ?? a.payload, null, 2);
+
+// Les `reason` / `*_reason` sont du texte LLM qui varie à chaque run même
+// quand la classification est stable → exclus du diff (sinon ils noient les
+// vrais changements : certainty, signals, labels, sub_labels).
+const stripReasons = (v: any): any => {
+  if (Array.isArray(v)) return v.map(stripReasons);
+  if (v && typeof v === "object") {
+    const o: Record<string, any> = {};
+    for (const k of Object.keys(v)) {
+      if (k === "reason" || k.endsWith("_reason")) continue;
+      o[k] = stripReasons(v[k]);
+    }
+    return o;
+  }
+  return v;
+};
+
+const analysisDiffJson = (a: AnalysisRow): string =>
   JSON.stringify(
-    (a.payload as any)?.analysis ?? a.payload,
+    stripReasons((a.payload as any)?.analysis ?? a.payload),
     null,
     2,
   );
 
 // Rendu façon GitHub : vert = ajout, rouge = suppression, gris = inchangé.
 function AnalysisDiff({
-  base,
-  next,
+  lines,
+  dim,
 }: {
-  base: string | null;
-  next: string;
+  lines: DiffLine[];
+  dim: boolean;
 }) {
-  const lines =
-    base == null
-      ? next.split("\n").map((v) => ({ t: "eq" as const, v }))
-      : diffLines(base, next);
   return (
     <div
       style={{
@@ -62,9 +78,9 @@ function AnalysisDiff({
             ? "#04260f"
             : l.t === "del"
               ? "#5c1a17"
-              : base == null
-                ? "#1f2328"
-                : "#8a8f98";
+              : dim
+                ? "#8a8f98"
+                : "#1f2328";
         return (
           <div
             key={i}
@@ -334,23 +350,29 @@ export function ConversationDetail() {
             )}
           </Space>
           {data.analyses.map((a, idx) => {
-            const cur = analysisJson(a);
-            let base: string | null = null;
+            const rawCur = analysisJson(a);
+            const diffCur = analysisDiffJson(a);
+            let baseDiff: string | null = null;
             let refLabel = "version initiale";
             if (a.is_canon) {
               refLabel = "référence · canon";
             } else if (canonAnalysis) {
-              base = analysisJson(canonAnalysis);
-              refLabel = "diff vs CANON";
+              baseDiff = analysisDiffJson(canonAnalysis);
+              refLabel = "vs CANON";
             } else {
               const older = data.analyses[idx + 1];
               if (older) {
-                base = analysisJson(older);
-                refLabel = `diff vs version précédente · ${new Date(
+                baseDiff = analysisDiffJson(older);
+                refLabel = `vs version précédente · ${new Date(
                   older.created_at,
                 ).toLocaleString("fr-FR")}`;
               }
             }
+            const lines: DiffLine[] =
+              baseDiff == null
+                ? diffCur.split("\n").map((v) => ({ t: "eq" as const, v }))
+                : diffLines(baseDiff, diffCur);
+            const nChanged = lines.filter((l) => l.t !== "eq").length;
             return (
               <Card
                 key={a.id}
@@ -362,9 +384,9 @@ export function ConversationDetail() {
                 title={
                   <Space wrap size={4}>
                     {a.is_canon && <Tag color="green">CANON</Tag>}
-                    <Tag color={a.status === "ok" ? "blue" : "default"}>
-                      {a.status}
-                    </Tag>
+                    {a.status !== "ok" && (
+                      <Tag color="default">{a.status}</Tag>
+                    )}
                     <span>prompt {a.prompt_name ?? "—"}</span>
                     <Typography.Text
                       type="secondary"
@@ -372,14 +394,21 @@ export function ConversationDetail() {
                     >
                       {new Date(a.created_at).toLocaleString("fr-FR")}
                     </Typography.Text>
-                    {analysisView === "diff" && (
-                      <Tag
-                        color={base ? "purple" : "default"}
-                        style={{ fontSize: 11 }}
-                      >
-                        {refLabel}
-                      </Tag>
-                    )}
+                    {analysisView === "diff" &&
+                      (baseDiff == null ? (
+                        <Tag color="default" style={{ fontSize: 11 }}>
+                          {refLabel}
+                        </Tag>
+                      ) : (
+                        <Tag
+                          color={nChanged ? "orange" : "green"}
+                          style={{ fontSize: 11 }}
+                        >
+                          {nChanged
+                            ? `${nChanged} diff${nChanged > 1 ? "s" : ""} · ${refLabel}`
+                            : `identique · ${refLabel}`}
+                        </Tag>
+                      ))}
                   </Space>
                 }
                 extra={
@@ -409,10 +438,10 @@ export function ConversationDetail() {
                       overflow: "auto",
                     }}
                   >
-                    {cur}
+                    {rawCur}
                   </pre>
                 ) : (
-                  <AnalysisDiff base={base} next={cur} />
+                  <AnalysisDiff lines={lines} dim={baseDiff != null} />
                 )}
               </Card>
             );
