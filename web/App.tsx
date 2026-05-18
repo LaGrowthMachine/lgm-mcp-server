@@ -73,7 +73,22 @@ export function Shell() {
         </Typography.Text>
       </Header>
       <Layout>
-        <Sider width={230} theme="light" breakpoint="lg" collapsedWidth={0}>
+        {/* AntD tronque les libellés de menu par défaut ; on autorise le
+            retour à la ligne (2 lignes) en plus d'un Sider plus large. */}
+        <style>{`
+          .ant-menu-inline .ant-menu-item {
+            height: auto;
+            line-height: 1.35;
+            padding-top: 8px;
+            padding-bottom: 8px;
+          }
+          .ant-menu-inline .ant-menu-item .ant-menu-title-content {
+            white-space: normal;
+            overflow: visible;
+            text-overflow: clip;
+          }
+        `}</style>
+        <Sider width={260} theme="light" breakpoint="lg" collapsedWidth={0}>
           <Menu
             mode="inline"
             selectedKeys={[selected]}
