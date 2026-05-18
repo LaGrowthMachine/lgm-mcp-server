@@ -1,9 +1,11 @@
 node_modules/
 dist/
+web-dist/
 .env
 .env.*
 !.env.example
 *.log
+.playwright-cli/
 docker-compose.override.yml
 .DS_Store
 *.mcpb

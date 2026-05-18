@@ -11,10 +11,10 @@ import {
 } from "./conversationClassifier";
 import { inferStructured } from "./inference";
 
-// Cœur d'analyse partagé entre le tool MCP `analyze_conversation`
-// (src/tools.ts) et le harness d'éval (src/evalRoutes.ts). Contrat de
-// sortie identique : { conversation, analysis }. Le tracking et la
+// Cœur d'analyse du tool MCP `analyze_conversation` (src/tools.ts).
+// Contrat de sortie : { conversation, analysis }. Le tracking et la
 // présentation restent chez l'appelant — ce module ne fait QUE l'analyse.
+// (L'app d'éval, dans eval-app/, a son propre adaptateur DB-prompt.)
 
 export type AnalyzeResult = {
   conversation: string[];

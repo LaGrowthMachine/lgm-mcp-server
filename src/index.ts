@@ -1,5 +1,8 @@
+import "./eval/loadEnv";
 import express from "express";
 import axios from "axios";
+import path from "node:path";
+import fs from "node:fs";
 import { IncomingMessage } from "node:http";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -8,7 +11,8 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createMcpServer } from "./server";
 import { requestContext, isAllowedApiUrl, getApiUrl } from "./requestContext";
 import oauthRouter from "./oauth";
-import { evalRouter } from "./evalRoutes";
+import { evalRouter } from "./eval/routes";
+import { ensureSchema } from "./eval/db";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const TRANSPORT = process.env.LGM_MCP_TRANSPORT || "http";
@@ -16,9 +20,24 @@ const TRANSPORT = process.env.LGM_MCP_TRANSPORT || "http";
 const startHttpServer = async () => {
   const app = express();
 
-  // Harness d'éval — monté en tête : son urlencoded 2 Mo doit primer sur
-  // la limite 100 Ko des parsers globaux. Pass-through pour les autres routes.
-  app.use(evalRouter);
+  // Outil d'éval (validation de prompt) servi par CE serveur — routing par
+  // path, zéro 2e système. API sous /api/eval (parser 4 Mo propre, monté
+  // AVANT le json global 100 Ko), UI React buildée servie en statique sous
+  // /eval. Le MCP (/mcp), /health, /oauth restent inchangés.
+  app.use("/api/eval", evalRouter);
+  // Schéma + seed du prompt par défaut, non-bloquant : si Postgres est
+  // indisponible le MCP démarre quand même, seules les routes /api/eval
+  // répondront en erreur.
+  ensureSchema().catch((e) =>
+    console.error("[eval] ensureSchema KO (routes /api/eval dégradées):", e),
+  );
+  const webDist = path.resolve(__dirname, "../web-dist");
+  if (fs.existsSync(webDist)) {
+    app.use("/eval", express.static(webDist));
+    app.get(/^\/eval(?:\/.*)?$/, (_req, res) => {
+      res.sendFile(path.join(webDist, "index.html"));
+    });
+  }
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
