@@ -101,6 +101,15 @@ dur dans `inferStructured`. Impacte tous les appelants de
 > c) **signal restreint au `certainty: high`** des deux côtés (les sorties
 >    high-certainty sont nettement plus stables) ; low/medium = contexte ;
 > d) combinaison b+c.
+>
+> ✅ **RÉSOLU (D8, 2026-05-18) — mitigation b+c implémentée & validée prod.**
+> Diff réécrit (`evalRoutes.ts::diffConv` + distribution) : per-conv, une
+> régression n'est comptée que sur flip `suggested_label/sub_label` en
+> `high`-confiance des 2 côtés ; bande low/medium + flips de signaux =
+> bruit (non compté). Vue distribution agrégée prev→cur sur le batch.
+> Garde : alerte si toutes les paires sont same-version (= mesure du bruit).
+> Re-test prod (v33) : les divergences temp:0 same-version → « 0 régression ·
+> 2 bruit » + alerte affichée. Le harness donne un signal fiable.
 
 ### Taxonomie des champs (verrouillée sur `CLASSIFIER_TOOL_SCHEMA`)
 
