@@ -8,12 +8,17 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createMcpServer } from "./server";
 import { requestContext, isAllowedApiUrl, getApiUrl } from "./requestContext";
 import oauthRouter from "./oauth";
+import { evalRouter } from "./evalRoutes";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const TRANSPORT = process.env.LGM_MCP_TRANSPORT || "http";
 
 const startHttpServer = async () => {
   const app = express();
+
+  // Harness d'éval — monté en tête : son urlencoded 2 Mo doit primer sur
+  // la limite 100 Ko des parsers globaux. Pass-through pour les autres routes.
+  app.use(evalRouter);
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));

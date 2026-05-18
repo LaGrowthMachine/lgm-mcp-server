@@ -7,3 +7,6 @@ dist/
 docker-compose.override.yml
 .DS_Store
 *.mcpb
+
+# Harness d'éval — données d'entrée clients (PII : emails, sociétés). NE PAS committer.
+_bmad-output/conv-eval/input/

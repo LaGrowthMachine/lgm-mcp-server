@@ -4,16 +4,8 @@ import { z } from "zod";
 import { callFlow, McpFlowError } from "./callFlow";
 import { trackMcpEvent } from "./tracking";
 import { getApiKey } from "./requestContext";
-import {
-  buildClassifierSystemPrompt,
-  CONVERSATION_CLASSIFIER_VERSION,
-  CLASSIFIER_TOOL_NAME,
-  CLASSIFIER_TOOL_DESCRIPTION,
-  CLASSIFIER_TOOL_SCHEMA,
-} from "./agents/conversation-analyzer/conversationClassifier";
-import { inferStructured } from "./agents/conversation-analyzer/inference";
-import { formatConversationForClassifier } from "./agents/conversation-analyzer/conversationFormatter";
-import { fetchConversationMessages } from "./agents/conversation-analyzer/messageFetcher";
+import { CONVERSATION_CLASSIFIER_VERSION } from "./agents/conversation-analyzer/conversationClassifier";
+import { analyzeConversation } from "./agents/conversation-analyzer/analyze";
 import { assertLgmStaff } from "./agents/db-explorer/acl";
 import { runDbExplorerAgent } from "./agents/db-explorer/agentLoop";
 import { DB_EXPLORER_PROMPT_VERSION } from "./agents/db-explorer/prompt";
@@ -438,65 +430,16 @@ export const registerTools = (server: McpServer) => {
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
       try {
-        if (!/^[a-f0-9]{24}$/i.test(params.conversationId)) {
-          throw new McpFlowError(
-            "Invalid conversationId. Expected a 24-character hex string.",
-            400,
-          );
-        }
+        const result = await analyzeConversation(params.conversationId);
 
-        const messages = await fetchConversationMessages(params.conversationId);
-
-        const formatted = formatConversationForClassifier(messages);
-
-        if (formatted.messageCount === 0) {
-          return formatTextContent("Conversation Analysis", {
-            conversation: formatted.lines,
-            analysis: {
-              status: "skipped",
-              reason: "Conversation has no readable messages.",
-              messageCount: 0,
-            },
-          });
-        }
-
-        if (!formatted.hasLead) {
-          return formatTextContent("Conversation Analysis", {
-            conversation: formatted.lines,
-            analysis: {
-              status: "skipped",
-              reason:
-                "Conversation has no lead messages. Nothing to classify.",
-              messageCount: formatted.messageCount,
-            },
-          });
-        }
-
-        const delimiter = crypto.randomBytes(8).toString("hex");
-        const systemPrompt = buildClassifierSystemPrompt(delimiter);
-        const userMessage = `<CONVERSATION_${delimiter}>\n${formatted.lines.join("\n\n")}\n</CONVERSATION_${delimiter}>`;
-
-        const classification = await inferStructured<Record<string, unknown>>({
-          systemPrompt,
-          userMessage,
-          toolName: CLASSIFIER_TOOL_NAME,
-          toolDescription: CLASSIFIER_TOOL_DESCRIPTION,
-          toolSchema: CLASSIFIER_TOOL_SCHEMA as unknown as Record<string, unknown>,
-        });
-
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "analyze_conversation",
-          promptVersion: CONVERSATION_CLASSIFIER_VERSION,
-        });
-
-        return formatTextContent("Conversation Analysis", {
-          conversation: formatted.lines,
-          analysis: {
-            status: "ok",
+        if (result.analysis.status === "ok") {
+          await trackMcpEvent(apiKey, "mcp_tool_called", {
+            toolName: "analyze_conversation",
             promptVersion: CONVERSATION_CLASSIFIER_VERSION,
-            classification,
-          },
-        });
+          });
+        }
+
+        return formatTextContent("Conversation Analysis", result);
       } catch (error) {
         return handleToolError(error);
       }

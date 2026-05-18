@@ -36,6 +36,10 @@ export const inferStructured = async <T>(args: InferStructuredArgs): Promise<T> 
       {
         model: DEFAULT_MODEL,
         max_tokens: args.maxTokens ?? 2000,
+        // temperature:0 — déterminisme requis pour la détection de régression
+        // du harness d'éval (cf. spec conv-eval-harness, défaut critique #1).
+        // Impacte tous les appelants d'analyze_conversation (souhaité).
+        temperature: 0,
         system: args.systemPrompt,
         tools: [
           {
