@@ -55,7 +55,7 @@ export function Conversations() {
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Typography.Title level={3} style={{ marginTop: 0 }}>
-        Conversations analysées
+        Liste conversations
       </Typography.Title>
       <Space>
         <span>Favorites seulement</span>

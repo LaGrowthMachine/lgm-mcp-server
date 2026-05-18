@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Typography,
   Input,
@@ -9,10 +9,9 @@ import {
   Progress,
   App,
   Popconfirm,
-  Tabs,
 } from "antd";
 import { Link } from "react-router-dom";
-import { http, GenerateReplyResp, ReplyListItem } from "../api";
+import { http, GenerateReplyResp } from "../api";
 
 interface Row extends GenerateReplyResp {
   key: string;
@@ -40,7 +39,7 @@ const verdictTag = (r: Row) => {
   return <Tag>incomparable</Tag>;
 };
 
-function BatchTab() {
+export function GenerateReplies() {
   const { message } = App.useApp();
   const [ids, setIds] = useState(
     () => sessionStorage.getItem("eval.ids") ?? "",
@@ -122,11 +121,14 @@ function BatchTab() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
+      <Typography.Title level={3} style={{ marginTop: 0 }}>
+        Générer des réponses
+      </Typography.Title>
       <Typography.Paragraph type="secondary">
         Génère une réponse avec le <strong>prompt réponse actif</strong> (1
         inférence / conv, comme l'analyse). Chaque réponse est comparée à la
-        réponse <strong>favoritée</strong> de la conv (diff texte déterministe,
-        temperature 0). Favorite-la pour qu'elle devienne la référence.
+        réponse <strong>favoritée</strong> de la conv. Favorite-la pour qu'elle
+        devienne la référence.
       </Typography.Paragraph>
 
       <Input.TextArea
@@ -259,127 +261,6 @@ function BatchTab() {
           />
         </>
       )}
-    </Space>
-  );
-}
-
-function LibraryTab() {
-  const { message } = App.useApp();
-  const [rows, setRows] = useState<ReplyListItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(false);
-  const pageSize = 30;
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const { data } = await http.get<{
-        rows: ReplyListItem[];
-        total: number;
-      }>("/replies", { params: { page, pageSize } });
-      setRows(data.rows);
-      setTotal(data.total);
-    } finally {
-      setLoading(false);
-    }
-  }, [page]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const del = async (id: string) => {
-    await http.delete(`/replies/${id}`);
-    message.success("Réponse supprimée");
-    load();
-  };
-
-  return (
-    <Table
-      size="small"
-      rowKey="id"
-      loading={loading}
-      dataSource={rows}
-      pagination={{
-        current: page,
-        pageSize,
-        total,
-        onChange: setPage,
-        showSizeChanger: false,
-      }}
-      columns={[
-        {
-          title: "conversation",
-          dataIndex: "conversation_id",
-          render: (v: string) => (
-            <Link to={`/conversations/${v}`}>
-              <code>{v}</code>
-            </Link>
-          ),
-        },
-        { title: "prompt", dataIndex: "prompt_name", width: 90 },
-        {
-          title: "favorite",
-          dataIndex: "is_favorite",
-          width: 90,
-          render: (v: boolean) =>
-            v ? <Tag color="gold">favorite</Tag> : "—",
-        },
-        {
-          title: "aperçu",
-          dataIndex: "preview",
-          render: (v: string) => (
-            <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
-              {v}
-            </Typography.Text>
-          ),
-        },
-        {
-          title: "créé",
-          dataIndex: "created_at",
-          width: 160,
-          render: (v: string) => new Date(v).toLocaleString("fr-FR"),
-        },
-        {
-          title: "",
-          width: 80,
-          render: (_: unknown, r: ReplyListItem) => (
-            <Popconfirm
-              title="Supprimer cette réponse ?"
-              onConfirm={() => del(r.id)}
-            >
-              <Button size="small" danger>
-                Suppr.
-              </Button>
-            </Popconfirm>
-          ),
-        },
-      ]}
-    />
-  );
-}
-
-export function Replies() {
-  return (
-    <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Typography.Title level={3} style={{ marginTop: 0 }}>
-        Réponses
-      </Typography.Title>
-      <Tabs
-        items={[
-          {
-            key: "batch",
-            label: "Rejouer (batch)",
-            children: <BatchTab />,
-          },
-          {
-            key: "lib",
-            label: "Bibliothèque",
-            children: <LibraryTab />,
-          },
-        ]}
-      />
     </Space>
   );
 }

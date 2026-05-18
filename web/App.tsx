@@ -2,9 +2,10 @@ import { Layout, Menu, Typography } from "antd";
 import {
   SearchOutlined,
   ExperimentOutlined,
-  MessageOutlined,
-  FileTextOutlined,
   SendOutlined,
+  MessageOutlined,
+  ProfileOutlined,
+  FileTextOutlined,
 } from "@ant-design/icons";
 import {
   Routes,
@@ -15,18 +16,32 @@ import {
 } from "react-router-dom";
 import { Discover } from "./pages/Discover";
 import { Analyze } from "./pages/Analyze";
-import { Replies } from "./pages/Replies";
+import { GenerateReplies } from "./pages/GenerateReplies";
 import { Conversations } from "./pages/Conversations";
+import { RepliesList } from "./pages/RepliesList";
 import { ConversationDetail } from "./pages/ConversationDetail";
 import { Prompts } from "./pages/Prompts";
 
 const { Header, Sider, Content } = Layout;
 
 const NAV = [
-  { key: "/discover", icon: <SearchOutlined />, label: "Découverte" },
-  { key: "/analyze", icon: <ExperimentOutlined />, label: "Analyse" },
-  { key: "/replies", icon: <SendOutlined />, label: "Réponses" },
-  { key: "/conversations", icon: <MessageOutlined />, label: "Conversations" },
+  {
+    key: "/discover",
+    icon: <SearchOutlined />,
+    label: "Trouver des conversations",
+  },
+  {
+    key: "/analyze",
+    icon: <ExperimentOutlined />,
+    label: "Analyse de conversations",
+  },
+  { key: "/generate", icon: <SendOutlined />, label: "Générer des réponses" },
+  {
+    key: "/conversations",
+    icon: <MessageOutlined />,
+    label: "Liste conversations",
+  },
+  { key: "/replies", icon: <ProfileOutlined />, label: "Liste réponses" },
   { key: "/prompts", icon: <FileTextOutlined />, label: "Prompts" },
 ];
 
@@ -58,7 +73,7 @@ export function Shell() {
         </Typography.Text>
       </Header>
       <Layout>
-        <Sider width={210} theme="light" breakpoint="lg" collapsedWidth={0}>
+        <Sider width={230} theme="light" breakpoint="lg" collapsedWidth={0}>
           <Menu
             mode="inline"
             selectedKeys={[selected]}
@@ -81,12 +96,13 @@ export function Shell() {
               <Route path="/" element={<Navigate to="/discover" replace />} />
               <Route path="/discover" element={<Discover />} />
               <Route path="/analyze" element={<Analyze />} />
-              <Route path="/replies" element={<Replies />} />
+              <Route path="/generate" element={<GenerateReplies />} />
               <Route path="/conversations" element={<Conversations />} />
               <Route
                 path="/conversations/:id"
                 element={<ConversationDetail />}
               />
+              <Route path="/replies" element={<RepliesList />} />
               <Route path="/prompts" element={<Prompts />} />
             </Routes>
           </div>

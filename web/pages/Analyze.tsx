@@ -122,7 +122,7 @@ export function Analyze() {
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Typography.Title level={3} style={{ marginTop: 0 }}>
-        Analyse
+        Analyse de conversations
       </Typography.Title>
       <Typography.Paragraph type="secondary">
         Analyse avec le <strong>prompt actif</strong>. Chaque conv est créée /

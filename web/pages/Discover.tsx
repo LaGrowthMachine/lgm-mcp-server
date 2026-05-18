@@ -49,7 +49,7 @@ export function Discover() {
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <div>
         <Typography.Title level={3} style={{ marginTop: 0 }}>
-          Découverte de conversations
+          Trouver des conversations
         </Typography.Title>
         <Typography.Paragraph type="secondary">
           Colle un CSV LGM (colonne <code>company_id</code>) ou des userId
