@@ -170,89 +170,182 @@ const SIGNAL_KEYS = [
 ];
 const LABEL_KEYS = ["negative", "open", "curious", "interest", "confirmed_need"];
 
+type Sev = 1 | 2 | 3;
 interface Change {
-  sev: 1 | 2 | 3;
+  sev: Sev;
   text: string;
 }
+type Verdict = "reg" | "watch" | "noise" | "stable";
 
-// prev = plus ancienne des 2, cur = la plus récente.
-const diffStable = (prev: unknown, cur: unknown): Change[] => {
+const CRANK: Record<string, number> = {
+  high: 3,
+  medium: 2,
+  low: 1,
+  very_low: 0,
+};
+const crank = (v: unknown): number =>
+  typeof v === "string" && v in CRANK ? CRANK[v] : -1;
+const str = (v: unknown): string => (v == null ? "—" : String(v));
+
+interface ConvDiff {
+  changes: Change[];
+  verdict: Verdict;
+  sameVersion: boolean;
+}
+
+// Décision b+c : per-conv durci au high-certainty (le bruit d'inférence à
+// temp:0 vit dans la bande low/medium et les flips de signaux). Une vraie
+// régression = transition de status, changement de schéma, ou flip de
+// label/sub_label alors que le modèle était high-confiance des 2 côtés.
+const diffConv = (prev: unknown, cur: unknown): ConvDiff => {
   const changes: Change[] = [];
   const pa = asObj(prev);
   const ca = asObj(cur);
-  if (!pa || !ca) return changes;
+  if (!pa || !ca) return { changes, verdict: "stable", sameVersion: true };
 
   const pStatus = String(pa.status ?? "?");
   const cStatus = String(ca.status ?? "?");
+  const sameVersion = pa.promptVersion === ca.promptVersion;
+
   if (pStatus !== cStatus) {
-    changes.push({
-      sev: 1,
-      text: `status: ${pStatus} → ${cStatus} (transition)`,
-    });
+    changes.push({ sev: 1, text: `status: ${pStatus} → ${cStatus} (transition)` });
   }
   if (pa.promptVersion !== ca.promptVersion) {
     changes.push({
       sev: 3,
-      text: `promptVersion: ${String(pa.promptVersion ?? "—")} → ${String(
-        ca.promptVersion ?? "—",
-      )}`,
+      text: `promptVersion: ${str(pa.promptVersion)} → ${str(ca.promptVersion)}`,
     });
   }
-  if (pStatus !== "ok" || cStatus !== "ok") return changes;
 
-  const pc = asObj(pa.classification) ?? {};
-  const cc = asObj(ca.classification) ?? {};
+  if (pStatus === "ok" && cStatus === "ok") {
+    const pc = asObj(pa.classification) ?? {};
+    const cc = asObj(ca.classification) ?? {};
 
-  // diff de schéma : clés top-level présentes d'un seul côté
-  const keys = new Set([...Object.keys(pc), ...Object.keys(cc)]);
-  for (const key of keys) {
-    if (!(key in pc) || !(key in cc)) {
+    // schéma : structural → toujours sev1
+    for (const key of new Set([...Object.keys(pc), ...Object.keys(cc)])) {
+      if (!(key in pc) || !(key in cc)) {
+        changes.push({
+          sev: 1,
+          text: `schéma: clé "${key}" ${key in cc ? "ajoutée" : "retirée"}`,
+        });
+      }
+    }
+
+    const bothHigh =
+      crank(pc.suggested_sub_label_certainty) === 3 &&
+      crank(cc.suggested_sub_label_certainty) === 3;
+
+    if (str(pc.suggested_label) !== str(cc.suggested_label)) {
       changes.push({
-        sev: 1,
-        text: `schéma: clé "${key}" ${key in cc ? "ajoutée" : "retirée"}`,
+        sev: bothHigh ? 1 : 3,
+        text: `suggested_label: ${str(pc.suggested_label)} → ${str(
+          cc.suggested_label,
+        )}${bothHigh ? " [high/high → régression]" : " [conf. faible → bruit probable]"}`,
       });
+    }
+    if (str(pc.suggested_sub_label) !== str(cc.suggested_sub_label)) {
+      changes.push({
+        sev: bothHigh ? 2 : 3,
+        text: `suggested_sub_label: ${str(pc.suggested_sub_label)} → ${str(
+          cc.suggested_sub_label,
+        )}`,
+      });
+    }
+    if (
+      str(pc.suggested_sub_label_certainty) !==
+      str(cc.suggested_sub_label_certainty)
+    ) {
+      changes.push({
+        sev: 3,
+        text: `suggested_sub_label_certainty: ${str(
+          pc.suggested_sub_label_certainty,
+        )} → ${str(cc.suggested_sub_label_certainty)}`,
+      });
+    }
+    if (str(pc.alternative_sub_label) !== str(cc.alternative_sub_label)) {
+      changes.push({
+        sev: 3,
+        text: `alternative_sub_label: ${str(pc.alternative_sub_label)} → ${str(
+          cc.alternative_sub_label,
+        )}`,
+      });
+    }
+
+    const pl = asObj(pc.labels) ?? {};
+    const cl = asObj(cc.labels) ?? {};
+    for (const lk of LABEL_KEYS) {
+      const a = asObj(pl[lk])?.certainty;
+      const b = asObj(cl[lk])?.certainty;
+      if (str(a) !== str(b)) {
+        const crossesHigh = (crank(a) === 3) !== (crank(b) === 3);
+        changes.push({
+          sev: crossesHigh ? 2 : 3,
+          text: `labels.${lk}.certainty: ${str(a)} → ${str(b)}${
+            crossesHigh ? " (franchit high)" : ""
+          }`,
+        });
+      }
+    }
+
+    const ps = asObj(pc.signals) ?? {};
+    const cs = asObj(cc.signals) ?? {};
+    for (const sk of SIGNAL_KEYS) {
+      if (str(ps[sk]) !== str(cs[sk])) {
+        changes.push({
+          sev: 3,
+          text: `signals.${sk}: ${str(ps[sk])} → ${str(cs[sk])}`,
+        });
+      }
     }
   }
 
-  const cmp = (label: string, a: unknown, b: unknown, sev: 1 | 2 | 3): void => {
-    const av = a == null ? "—" : String(a);
-    const bv = b == null ? "—" : String(b);
-    if (av !== bv) changes.push({ sev, text: `${label}: ${av} → ${bv}` });
-  };
+  const maxSev = changes.length
+    ? (Math.min(...changes.map((c) => c.sev)) as Sev)
+    : 99;
+  const verdict: Verdict =
+    changes.length === 0
+      ? "stable"
+      : maxSev === 1
+        ? "reg"
+        : maxSev === 2
+          ? "watch"
+          : "noise";
+  return { changes, verdict, sameVersion };
+};
 
-  cmp("suggested_label", pc.suggested_label, cc.suggested_label, 2);
-  cmp("suggested_sub_label", pc.suggested_sub_label, cc.suggested_sub_label, 2);
-  cmp(
-    "suggested_sub_label_certainty",
-    pc.suggested_sub_label_certainty,
-    cc.suggested_sub_label_certainty,
-    3,
-  );
-  cmp(
-    "alternative_sub_label",
-    pc.alternative_sub_label,
-    cc.alternative_sub_label,
-    3,
-  );
-
-  const pl = asObj(pc.labels) ?? {};
-  const cl = asObj(cc.labels) ?? {};
-  for (const lk of LABEL_KEYS) {
-    cmp(
-      `labels.${lk}.certainty`,
-      asObj(pl[lk])?.certainty,
-      asObj(cl[lk])?.certainty,
-      2,
-    );
+// Décision b : distribution agrégée sur le batch (robuste au bruit per-conv).
+interface Dist {
+  ok: number;
+  skipped: number;
+  labels: Record<string, number>;
+  signals: Record<string, number>;
+}
+const emptyDist = (): Dist => ({
+  ok: 0,
+  skipped: 0,
+  labels: Object.fromEntries(LABEL_KEYS.map((l) => [l, 0])),
+  signals: Object.fromEntries(SIGNAL_KEYS.map((s) => [s, 0])),
+});
+const addToDist = (d: Dist, analysis: unknown): void => {
+  const a = asObj(analysis);
+  if (!a) return;
+  const st = String(a.status ?? "");
+  if (st === "skipped") {
+    d.skipped++;
+    return;
   }
-
-  const ps = asObj(pc.signals) ?? {};
-  const cs = asObj(cc.signals) ?? {};
-  for (const sk of SIGNAL_KEYS) {
-    cmp(`signals.${sk}`, ps[sk], cs[sk], 2);
-  }
-
-  return changes;
+  if (st !== "ok") return;
+  d.ok++;
+  const c = asObj(a.classification) ?? {};
+  const sl = String(c.suggested_label ?? "");
+  if (sl in d.labels) d.labels[sl]++;
+  const sig = asObj(c.signals) ?? {};
+  for (const sk of SIGNAL_KEYS) if (sig[sk] === true) d.signals[sk]++;
+};
+const deltaCell = (p: number, c: number): string => {
+  const d = c - p;
+  const col = d === 0 ? "sev3" : "sev1";
+  return `${p} → ${c} <span class="${col}">(${d > 0 ? "+" : ""}${d})</span>`;
 };
 
 // ---------- router ----------
@@ -478,57 +571,119 @@ evalRouter.post(
     try {
       const convs = await listConversationsWithCounts();
       const eligible = convs.filter((c) => c.count >= 2);
-      const skipped = convs.length - eligible.length;
+      const ignored = convs.length - eligible.length;
 
-      let changed = 0;
-      const blocks: string[] = [];
+      const prevDist = emptyDist();
+      const curDist = emptyDist();
+      let nReg = 0;
+      let nWatch = 0;
+      let nNoise = 0;
+      let nStable = 0;
+      let nSameVer = 0;
+      const regBlocks: string[] = [];
+      const noiseIds: string[] = [];
+
       for (const c of eligible) {
         const rows = await getLastTwoAnalyses(c.conversationId);
         if (rows.length < 2) continue;
-        // rows[0] = plus récente, rows[1] = précédente
-        const curPayload = asObj(rows[0].payload);
-        const prevPayload = asObj(rows[1].payload);
-        const changes = diffStable(
-          prevPayload?.analysis,
-          curPayload?.analysis,
-        );
-        if (changes.length === 0) continue;
-        changed++;
-        const sorted = changes.sort((a, b) => a.sev - b.sev);
-        blocks.push(
-          `<div class="box"><strong>${esc(c.conversationId)}</strong> ` +
-            `<span class="muted">(${c.count} analyses · prev ${esc(
-              rows[1].createdAt,
-            )} → cur ${esc(rows[0].createdAt)})</span>\n` +
-            sorted
-              .map(
-                (ch) =>
-                  `<div class="chg sev${ch.sev}">${
-                    ch.sev === 1 ? "🔴" : ch.sev === 2 ? "🟠" : "🟡"
-                  } ${esc(ch.text)}</div>`,
-              )
-              .join("") +
-            `</div>`,
-        );
+        const cur = asObj(rows[0].payload)?.analysis; // plus récente
+        const prev = asObj(rows[1].payload)?.analysis; // précédente
+        addToDist(prevDist, prev);
+        addToDist(curDist, cur);
+
+        const d = diffConv(prev, cur);
+        if (d.sameVersion) nSameVer++;
+        if (d.verdict === "reg") nReg++;
+        else if (d.verdict === "watch") nWatch++;
+        else if (d.verdict === "noise") nNoise++;
+        else nStable++;
+
+        if (d.verdict === "reg" || d.verdict === "watch") {
+          const badge =
+            d.verdict === "reg"
+              ? '<span class="sev1">🔴 RÉGRESSION probable</span>'
+              : '<span class="sev2">🟠 à regarder</span>';
+          regBlocks.push(
+            `<div class="box"><strong>${esc(c.conversationId)}</strong> ${badge} ` +
+              `<span class="muted">(${c.count} analyses · ${
+                d.sameVersion
+                  ? "⚠️ MÊME version prompt → divergence = bruit d'inférence"
+                  : "versions différentes → candidate régression"
+              } · prev ${esc(rows[1].createdAt)} → cur ${esc(rows[0].createdAt)})</span>\n` +
+              d.changes
+                .sort((a, b) => a.sev - b.sev)
+                .map(
+                  (ch) =>
+                    `<div class="chg sev${ch.sev}">${
+                      ch.sev === 1 ? "🔴" : ch.sev === 2 ? "🟠" : "🟡"
+                    } ${esc(ch.text)}</div>`,
+                )
+                .join("") +
+              `</div>`,
+          );
+        } else if (d.verdict === "noise") {
+          noiseIds.push(c.conversationId);
+        }
       }
 
       log({
         event: "diff",
         eligible: eligible.length,
-        changed,
-        stable: eligible.length - changed,
-        skipped,
+        reg: nReg,
+        watch: nWatch,
+        noise: nNoise,
+        stable: nStable,
+        sameVer: nSameVer,
+        ignored,
       });
-      const summary = `${eligible.length} conv comparées · <span class="sev1">${changed} avec changements</span> · ${
-        eligible.length - changed
-      } stables · ${skipped} ignorées (<2 analyses)`;
+
+      const allSameVer =
+        eligible.length > 0 && nSameVer === eligible.length;
+      const distRow = (
+        label: string,
+        p: number,
+        c: number,
+      ): string =>
+        `<div class="chg">${esc(label)} : ${deltaCell(p, c)}</div>`;
+      const distBlock =
+        `<div class="box"><strong>Distribution batch (robuste au bruit per-conv)</strong>\n` +
+        distRow("status ok", prevDist.ok, curDist.ok) +
+        distRow("status skipped", prevDist.skipped, curDist.skipped) +
+        LABEL_KEYS.map((l) =>
+          distRow(`suggested_label=${l}`, prevDist.labels[l], curDist.labels[l]),
+        ).join("") +
+        SIGNAL_KEYS.map((s) =>
+          distRow(`signal ${s}`, prevDist.signals[s], curDist.signals[s]),
+        ).join("") +
+        `</div>`;
+
+      const summary =
+        `${eligible.length} conv comparées · ` +
+        `<span class="sev1">${nReg} régression probable</span> · ` +
+        `<span class="sev2">${nWatch} à regarder</span> · ` +
+        `${nNoise} bruit · ${nStable} stables · ${ignored} ignorées (<2 analyses)`;
+
+      const warn = allSameVer
+        ? `<p class="err">⚠️ Toutes les paires comparées sont en <strong>même version de prompt</strong> : ce diff mesure le <strong>bruit d'inférence</strong>, pas une régression. Pour un vrai diff de régression : change le prompt, re-deploy, ré-analyse les mêmes convs, puis relance le diff.</p>`
+        : "";
+
       res.send(
         page({
           k,
-          banner: { kind: changed > 0 ? "err" : "ok", msg: "Diff terminé." },
-          diffBlock: `<p>${summary}</p>${
-            blocks.length ? blocks.join("\n") : '<p class="ok">Aucun changement sur les champs stables. ✅</p>'
-          }`,
+          banner: {
+            kind: nReg > 0 ? "err" : "ok",
+            msg: "Diff terminé.",
+          },
+          diffBlock:
+            `<p>${summary}</p>${warn}${distBlock}` +
+            (regBlocks.length
+              ? `<p class="muted">Per-conv (régression / à regarder seulement ; le bruit est exclu) :</p>${regBlocks.join("\n")}`
+              : '<p class="ok">Aucune régression high-confiance. ✅</p>') +
+            (noiseIds.length
+              ? `<p class="muted">${noiseIds.length} conv avec changements faible-confiance/bruit (non comptés) : ${esc(
+                  noiseIds.join(", "),
+                )}</p>`
+              : ""),
         }),
       );
     } catch (e) {
