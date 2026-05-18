@@ -16,8 +16,83 @@ import {
   ArrowLeftOutlined,
   SendOutlined,
 } from "@ant-design/icons";
+import { Segmented } from "antd";
 import { useParams, useNavigate } from "react-router-dom";
-import { http, ConvDetail, ReplyRowApi } from "../api";
+import { http, ConvDetail, ReplyRowApi, AnalysisRow } from "../api";
+import { diffLines } from "../lineDiff";
+
+const analysisJson = (a: AnalysisRow): string =>
+  JSON.stringify(
+    (a.payload as any)?.analysis ?? a.payload,
+    null,
+    2,
+  );
+
+// Rendu façon GitHub : vert = ajout, rouge = suppression, gris = inchangé.
+function AnalysisDiff({
+  base,
+  next,
+}: {
+  base: string | null;
+  next: string;
+}) {
+  const lines =
+    base == null
+      ? next.split("\n").map((v) => ({ t: "eq" as const, v }))
+      : diffLines(base, next);
+  return (
+    <div
+      style={{
+        margin: 0,
+        fontSize: 12,
+        lineHeight: "18px",
+        fontFamily: "ui-monospace, monospace",
+        maxHeight: 420,
+        overflow: "auto",
+        borderRadius: 6,
+        border: "1px solid #eee",
+      }}
+    >
+      {lines.map((l, i) => {
+        const bg =
+          l.t === "add" ? "#e6ffec" : l.t === "del" ? "#ffebe9" : "transparent";
+        const sign = l.t === "add" ? "+" : l.t === "del" ? "−" : " ";
+        const color =
+          l.t === "add"
+            ? "#04260f"
+            : l.t === "del"
+              ? "#5c1a17"
+              : base == null
+                ? "#1f2328"
+                : "#8a8f98";
+        return (
+          <div
+            key={i}
+            style={{
+              display: "flex",
+              background: bg,
+              color,
+              whiteSpace: "pre",
+            }}
+          >
+            <span
+              style={{
+                width: 18,
+                textAlign: "center",
+                userSelect: "none",
+                opacity: 0.6,
+                flex: "0 0 auto",
+              }}
+            >
+              {sign}
+            </span>
+            <span style={{ flex: 1, paddingRight: 8 }}>{l.v || " "}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export function ConversationDetail() {
   const { id = "" } = useParams();
@@ -26,6 +101,7 @@ export function ConversationDetail() {
   const [data, setData] = useState<ConvDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [analysisView, setAnalysisView] = useState<"diff" | "raw">("diff");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,6 +174,10 @@ export function ConversationDetail() {
   const favorite: ReplyRowApi | undefined = data.replies.find(
     (r) => r.is_favorite,
   );
+  // Référence du diff : le canon (la version validée). À défaut de canon,
+  // chaque version est diffée vs la précédente (plus ancienne) — la liste
+  // est triée du plus récent au plus ancien.
+  const canonAnalysis = data.analyses.find((a) => a.is_canon) ?? null;
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
@@ -231,60 +311,112 @@ export function ConversationDetail() {
 
           <Divider />
 
-          <Typography.Title level={5}>
-            Analyses ({data.analyses.length})
-          </Typography.Title>
-          {data.analyses.map((a) => (
-            <Card
-              key={a.id}
-              size="small"
-              style={{ marginBottom: 12 }}
-              title={
-                <Space>
-                  {a.is_canon && <Tag color="green">CANON</Tag>}
-                  <Tag color={a.status === "ok" ? "blue" : "default"}>
-                    {a.status}
-                  </Tag>
-                  <span>prompt {a.prompt_name ?? "—"}</span>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {new Date(a.created_at).toLocaleString("fr-FR")}
-                  </Typography.Text>
-                </Space>
+          <Space
+            style={{
+              width: "100%",
+              justifyContent: "space-between",
+              marginBottom: 8,
+            }}
+          >
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              Analyses ({data.analyses.length})
+            </Typography.Title>
+            {data.analyses.length > 0 && (
+              <Segmented
+                size="small"
+                value={analysisView}
+                onChange={(v) => setAnalysisView(v as "diff" | "raw")}
+                options={[
+                  { label: "Diff", value: "diff" },
+                  { label: "JSON brut", value: "raw" },
+                ]}
+              />
+            )}
+          </Space>
+          {data.analyses.map((a, idx) => {
+            const cur = analysisJson(a);
+            let base: string | null = null;
+            let refLabel = "version initiale";
+            if (a.is_canon) {
+              refLabel = "référence · canon";
+            } else if (canonAnalysis) {
+              base = analysisJson(canonAnalysis);
+              refLabel = "diff vs CANON";
+            } else {
+              const older = data.analyses[idx + 1];
+              if (older) {
+                base = analysisJson(older);
+                refLabel = `diff vs version précédente · ${new Date(
+                  older.created_at,
+                ).toLocaleString("fr-FR")}`;
               }
-              extra={
-                <Space>
-                  {!a.is_canon && (
-                    <Button size="small" onClick={() => setCanon(a.id)}>
-                      Définir canon
-                    </Button>
-                  )}
-                  <Popconfirm
-                    title="Supprimer cette analyse ?"
-                    onConfirm={() => delAnalysis(a.id)}
-                  >
-                    <Button size="small" danger>
-                      Suppr.
-                    </Button>
-                  </Popconfirm>
-                </Space>
-              }
-            >
-              <pre
+            }
+            return (
+              <Card
+                key={a.id}
+                size="small"
                 style={{
-                  margin: 0,
-                  fontSize: 12,
-                  maxHeight: 360,
-                  overflow: "auto",
+                  marginBottom: 12,
+                  borderColor: a.is_canon ? "#1f9d57" : undefined,
                 }}
+                title={
+                  <Space wrap size={4}>
+                    {a.is_canon && <Tag color="green">CANON</Tag>}
+                    <Tag color={a.status === "ok" ? "blue" : "default"}>
+                      {a.status}
+                    </Tag>
+                    <span>prompt {a.prompt_name ?? "—"}</span>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12 }}
+                    >
+                      {new Date(a.created_at).toLocaleString("fr-FR")}
+                    </Typography.Text>
+                    {analysisView === "diff" && (
+                      <Tag
+                        color={base ? "purple" : "default"}
+                        style={{ fontSize: 11 }}
+                      >
+                        {refLabel}
+                      </Tag>
+                    )}
+                  </Space>
+                }
+                extra={
+                  <Space>
+                    {!a.is_canon && (
+                      <Button size="small" onClick={() => setCanon(a.id)}>
+                        Définir canon
+                      </Button>
+                    )}
+                    <Popconfirm
+                      title="Supprimer cette analyse ?"
+                      onConfirm={() => delAnalysis(a.id)}
+                    >
+                      <Button size="small" danger>
+                        Suppr.
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                }
               >
-                {JSON.stringify(
-                  (a.payload as any)?.analysis ?? a.payload,
-                  null,
-                  2,
+                {analysisView === "raw" ? (
+                  <pre
+                    style={{
+                      margin: 0,
+                      fontSize: 12,
+                      maxHeight: 420,
+                      overflow: "auto",
+                    }}
+                  >
+                    {cur}
+                  </pre>
+                ) : (
+                  <AnalysisDiff base={base} next={cur} />
                 )}
-              </pre>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
           {data.analyses.length === 0 && (
             <Typography.Text type="secondary">
               Aucune analyse pour cette conversation.
