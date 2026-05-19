@@ -109,15 +109,18 @@ export function Prompts() {
     }
   };
 
+  // Clone = ouvrir la modale de création pré-remplie du corps source ;
+  // nom choisi, rien n'est persisté avant « Enregistrer ».
   const clone = async (name: string) => {
     try {
-      const { data } = await http.post(`/prompts/${name}/clone`, { kind });
-      message.success(`Cloné en brouillon "${data.name}"`);
-      await load();
-      openEdit({
-        name: data.name,
-        status: "draft",
-      } as PromptListItem);
+      const { data } = await http.get(`/prompts/${name}`, {
+        params: { kind },
+      });
+      setEditMode("create");
+      setReadOnly(false);
+      setFormName(nextName);
+      setFormBody(data.body);
+      setEditOpen(true);
     } catch (e: any) {
       message.error(e?.response?.data?.error ?? "Échec clonage");
     }
@@ -154,7 +157,7 @@ export function Prompts() {
           />
         </div>
         <Button type="primary" onClick={openCreate}>
-          + Nouveau brouillon ({nextName})
+          + Nouveau brouillon
         </Button>
       </Space>
 

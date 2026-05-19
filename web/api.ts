@@ -48,6 +48,7 @@ export interface AnalysisRow {
   prompt_name: string | null;
   status: string;
   is_canon: boolean;
+  edited_at: string | null; // ≠ null ⇒ classification éditée à la main
   created_at: string;
   payload: {
     conversation: TranscriptItem[];

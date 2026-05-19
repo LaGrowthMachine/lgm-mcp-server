@@ -191,6 +191,29 @@ evalRouter.post(
   }),
 );
 
+// Édition manuelle de la classification. Aucun contrôle de schéma.
+evalRouter.put(
+  "/analyses/:id",
+  wrap(async (req, res) => {
+    const c = req.body?.classification;
+    if (c == null || typeof c !== "object" || Array.isArray(c)) {
+      res
+        .status(400)
+        .json({ error: "classification doit être un objet JSON" });
+      return;
+    }
+    const ok = await db.updateAnalysisClassification(
+      String(req.params.id),
+      c,
+    );
+    if (!ok) {
+      res.status(404).json({ error: "analyse inconnue" });
+      return;
+    }
+    res.json({ ok: true });
+  }),
+);
+
 evalRouter.delete(
   "/analyses/:id",
   wrap(async (req, res) => {
@@ -466,17 +489,4 @@ evalRouter.post(
   }),
 );
 
-// Clone un prompt en nouveau brouillon vN+1 (pour itérer depuis un validé).
-evalRouter.post(
-  "/prompts/:name/clone",
-  wrap(async (req, res) => {
-    const kind = asKind(req.body?.kind ?? req.query.kind);
-    const name = String(req.params.name);
-    const created = await db.clonePrompt(name, kind);
-    if (!created) {
-      res.status(404).json({ error: "prompt inconnu" });
-      return;
-    }
-    res.json({ ok: true, name: created });
-  }),
-);
+// (Clone géré côté client : GET du body source + POST /prompts.)

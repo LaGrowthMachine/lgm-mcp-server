@@ -9,6 +9,8 @@ import {
   Popconfirm,
   App,
   Divider,
+  Modal,
+  Input,
 } from "antd";
 import {
   StarFilled,
@@ -149,9 +151,16 @@ function ChatTranscript({ items }: { items: TranscriptItem[] }) {
   );
 }
 
-// JSON complet (mode « brut »).
+// Vue brute : analyse complète (status + promptVersion + classification).
 const analysisJson = (a: AnalysisRow): string =>
   JSON.stringify((a.payload as any)?.analysis ?? a.payload, null, 2);
+
+// Classification seule = ce qu'on édite et qu'on diffe (status/promptVersion
+// hors diff). Tolérant aux anciens payloads.
+const analysisClassification = (a: AnalysisRow): unknown =>
+  (a.payload as any)?.analysis?.classification ??
+  (a.payload as any)?.analysis ??
+  a.payload;
 
 // Les `reason` / `*_reason` sont du texte LLM qui varie à chaque run même
 // quand la classification est stable → exclus du diff (sinon ils noient les
@@ -170,11 +179,7 @@ const stripReasons = (v: any): any => {
 };
 
 const analysisDiffJson = (a: AnalysisRow): string =>
-  JSON.stringify(
-    stripReasons((a.payload as any)?.analysis ?? a.payload),
-    null,
-    2,
-  );
+  JSON.stringify(stripReasons(analysisClassification(a)), null, 2);
 
 // Rendu façon GitHub : vert = ajout, rouge = suppression, gris = inchangé.
 function AnalysisDiff({
@@ -246,6 +251,9 @@ export function ConversationDetail() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [analysisView, setAnalysisView] = useState<"diff" | "raw">("diff");
+  const [editAid, setEditAid] = useState<string | null>(null);
+  const [editBody, setEditBody] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -286,6 +294,38 @@ export function ConversationDetail() {
   const delAnalysis = async (aid: string) => {
     await http.delete(`/analyses/${aid}`);
     load();
+  };
+  const openEditAnalysis = (a: AnalysisRow) => {
+    setEditAid(a.id);
+    setEditBody(JSON.stringify(analysisClassification(a), null, 2));
+  };
+  const saveAnalysisEdit = async () => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(editBody);
+    } catch {
+      message.error("JSON invalide");
+      return;
+    }
+    if (
+      parsed == null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      message.error("La classification doit être un objet JSON");
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await http.put(`/analyses/${editAid}`, { classification: parsed });
+      message.success("Analyse éditée");
+      setEditAid(null);
+      load();
+    } catch (e: any) {
+      message.error(e?.response?.data?.error ?? "Échec édition");
+    } finally {
+      setEditSaving(false);
+    }
   };
   const delConv = async () => {
     await http.delete(`/conversations/${id}`);
@@ -503,6 +543,7 @@ export function ConversationDetail() {
                 ? diffCur.split("\n").map((v) => ({ t: "eq" as const, v }))
                 : diffLines(baseDiff, diffCur);
             const nChanged = lines.filter((l) => l.t !== "eq").length;
+            const hasClassif = !!(a.payload as any)?.analysis?.classification;
             return (
               <Card
                 key={a.id}
@@ -524,6 +565,12 @@ export function ConversationDetail() {
                     >
                       {new Date(a.created_at).toLocaleString("fr-FR")}
                     </Typography.Text>
+                    {a.edited_at && (
+                      <Tag color="purple" style={{ fontSize: 11 }}>
+                        ÉDITÉ ·{" "}
+                        {new Date(a.edited_at).toLocaleString("fr-FR")}
+                      </Tag>
+                    )}
                     {analysisView === "diff" &&
                       (baseDiff == null ? (
                         <Tag color="default" style={{ fontSize: 11 }}>
@@ -543,6 +590,14 @@ export function ConversationDetail() {
                 }
                 extra={
                   <Space>
+                    {hasClassif && (
+                      <Button
+                        size="small"
+                        onClick={() => openEditAnalysis(a)}
+                      >
+                        Éditer
+                      </Button>
+                    )}
                     {!a.is_canon && (
                       <Button size="small" onClick={() => setCanon(a.id)}>
                         Définir canon
@@ -583,6 +638,24 @@ export function ConversationDetail() {
           )}
         </div>
       </div>
+
+      <Modal
+        title="Éditer la classification"
+        open={editAid != null}
+        onCancel={() => setEditAid(null)}
+        onOk={saveAnalysisEdit}
+        confirmLoading={editSaving}
+        okText="Enregistrer"
+        cancelText="Annuler"
+        width={900}
+      >
+        <Input.TextArea
+          value={editBody}
+          onChange={(e) => setEditBody(e.target.value)}
+          autoSize={{ minRows: 16, maxRows: 30 }}
+          style={{ fontFamily: "ui-monospace, monospace", fontSize: 12.5 }}
+        />
+      </Modal>
     </Space>
   );
 }

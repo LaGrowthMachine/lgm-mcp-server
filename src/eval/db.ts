@@ -133,6 +133,13 @@ export const ensureSchema = async (): Promise<void> => {
       WHERE is_active AND status <> 'validated';
   `);
 
+  // Analyses éditables à la main : `edited_at` (NULL = jamais éditée).
+  // Idempotent, non destructif.
+  await p.query(`
+    ALTER TABLE analyses
+      ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+  `);
+
   // Seed par famille : défaut analysis (classifier) + défaut reply (playbook
   // DG), chacun actif si sa famille est vide.
   const seed = async (
@@ -309,22 +316,6 @@ export const validatePrompt = async (
   return (rowCount ?? 0) > 0;
 };
 
-// Clone n'importe quel prompt en NOUVEAU brouillon `vN+1` (pour itérer à
-// partir d'un validé figé). Renvoie le nom créé, ou null si source absente.
-export const clonePrompt = async (
-  srcName: string,
-  kind: PromptKind = "analysis",
-): Promise<string | null> => {
-  const src = await getPrompt(srcName, kind);
-  if (!src) return null;
-  const name = await nextPromptName(kind);
-  await getPool().query(
-    "INSERT INTO prompts (kind, name, body, status) VALUES ($1, $2, $3, 'draft')",
-    [kind, name, src.body],
-  );
-  return name;
-};
-
 // Met un prompt « live » (1 seul par famille). Seul un `validated` peut
 // l'être. Atomique : dé-live l'ancien, live le nouveau. Renvoie false si
 // introuvable OU non validé → route 409/404.
@@ -440,6 +431,7 @@ export interface AnalysisRow {
   prompt_name: string | null;
   status: string;
   is_canon: boolean;
+  edited_at: string | null;
   created_at: string;
   payload: unknown;
 }
@@ -460,7 +452,8 @@ export const getConversationDetail = async (
   );
   if (c.rows.length === 0) return null;
   const a = await p.query<AnalysisRow>(
-    `SELECT id::text AS id, prompt_name, status, is_canon, created_at, payload
+    `SELECT id::text AS id, prompt_name, status, is_canon, edited_at,
+            created_at, payload
      FROM analyses WHERE conversation_id = $1 ORDER BY created_at DESC`,
     [conversationId],
   );
@@ -546,11 +539,35 @@ export const getCanonAnalysis = async (
   conversationId: string,
 ): Promise<AnalysisRow | null> => {
   const { rows } = await getPool().query<AnalysisRow>(
-    `SELECT id::text AS id, prompt_name, status, is_canon, created_at, payload
+    `SELECT id::text AS id, prompt_name, status, is_canon, edited_at,
+            created_at, payload
      FROM analyses WHERE conversation_id = $1 AND is_canon LIMIT 1`,
     [conversationId],
   );
   return rows[0] ?? null;
+};
+
+// Réécrit payload.analysis.classification et estampille edited_at.
+// status / promptVersion / transcript intacts. false si introuvable → 404.
+export const updateAnalysisClassification = async (
+  analysisId: string,
+  classification: unknown,
+): Promise<boolean> => {
+  const p = getPool();
+  const { rows } = await p.query<{ payload: unknown }>(
+    "SELECT payload FROM analyses WHERE id = $1",
+    [analysisId],
+  );
+  if (rows.length === 0) return false;
+  const payload = (rows[0].payload ?? {}) as Record<string, unknown>;
+  const analysis = (payload.analysis ?? {}) as Record<string, unknown>;
+  analysis.classification = classification;
+  payload.analysis = analysis;
+  await p.query(
+    "UPDATE analyses SET payload = $2::jsonb, edited_at = now() WHERE id = $1",
+    [analysisId, JSON.stringify(payload)],
+  );
+  return true;
 };
 
 // ---------- réponses ----------
