@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Typography,
   Input,
@@ -52,6 +52,10 @@ export function Analyze() {
   const [total, setTotal] = useState(0);
   const [prompts, setPrompts] = useState<PromptListItem[]>([]);
   const [promptSel, setPromptSel] = useState<string>(""); // "" = live
+  // Annulation du run courant. Abort à l'unmount (quitter la page Analyse en
+  // SPA) + bouton Arrêter. Volontairement PAS d'abort sur onglet masqué : un
+  // gros batch doit pouvoir tourner en arrière-plan.
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     http
@@ -60,11 +64,17 @@ export function Analyze() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const stop = () => abortRef.current?.abort();
+
   const runList = async (list: string[]) => {
     if (list.length === 0) {
       message.warning("Aucun conversationId valide");
       return;
     }
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     setRunning(true);
     setRows([]);
     setDone(0);
@@ -79,14 +89,17 @@ export function Analyze() {
     let completed = 0;
     const worker = async () => {
       for (let i = cursor++; i < list.length; i = cursor++) {
+        if (ctrl.signal.aborted) return;
         const id = list[i];
         try {
           const { data } = await http.post<AnalyzeResp>(
             `/analyze/${id}`,
             promptSel ? { promptName: promptSel } : {},
+            { signal: ctrl.signal },
           );
           results[i] = { ...data, key: data.analysisId };
         } catch (e: any) {
+          if (ctrl.signal.aborted) return; // requête annulée : on s'arrête net
           results[i] = {
             key: `err-${id}`,
             conversationId: id,
@@ -104,11 +117,17 @@ export function Analyze() {
         setRows(results.filter((r): r is Row => !!r));
       }
     };
-    await Promise.all(
-      Array.from({ length: Math.min(MAX_CONCURRENCY, list.length) }, worker),
-    );
-    setRunning(false);
-    message.success("Analyse terminée");
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(MAX_CONCURRENCY, list.length) }, worker),
+      );
+    } finally {
+      if (abortRef.current === ctrl) abortRef.current = null;
+      setRunning(false);
+    }
+    if (ctrl.signal.aborted)
+      message.info(`Analyse interrompue (${completed}/${list.length})`);
+    else message.success("Analyse terminée");
   };
 
   const analyzeFavorites = async () => {
@@ -190,6 +209,11 @@ export function Analyze() {
         <Button loading={running} onClick={analyzeFavorites}>
           ★ Analyser les favorites
         </Button>
+        {running && (
+          <Button danger onClick={stop}>
+            Arrêter
+          </Button>
+        )}
         {total > 0 && (
           <Progress
             percent={Math.round((done / total) * 100)}
