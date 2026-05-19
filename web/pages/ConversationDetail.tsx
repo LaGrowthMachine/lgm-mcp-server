@@ -61,6 +61,12 @@ function Bubble({
         alignItems: right ? "flex-end" : "flex-start",
       }}
     >
+      <Typography.Text
+        type="secondary"
+        style={{ fontSize: 11, marginBottom: 3, padding: "0 4px" }}
+      >
+        {[role, meta].filter(Boolean).join(" · ")}
+      </Typography.Text>
       <div
         style={{
           maxWidth: "78%",
@@ -79,12 +85,6 @@ function Bubble({
       >
         {text}
       </div>
-      <Typography.Text
-        type="secondary"
-        style={{ fontSize: 11, marginTop: 3, padding: "0 4px" }}
-      >
-        {[role, meta].filter(Boolean).join(" · ")}
-      </Typography.Text>
     </div>
   );
 }
