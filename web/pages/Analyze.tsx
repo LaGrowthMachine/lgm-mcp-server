@@ -21,6 +21,8 @@ interface Row extends AnalyzeResp {
 }
 
 const HEX24 = /^[a-f0-9]{24}$/i;
+// Plafond de requêtes /analyze simultanées côté navigateur (choix conservateur).
+const MAX_CONCURRENCY = 3;
 const parseIds = (raw: string): string[] => [
   ...new Set(
     raw
@@ -67,31 +69,44 @@ export function Analyze() {
     setRows([]);
     setDone(0);
     setTotal(list.length);
-    const acc: Row[] = [];
-    for (let i = 0; i < list.length; i++) {
-      const id = list[i];
-      try {
-        const { data } = await http.post<AnalyzeResp>(
-          `/analyze/${id}`,
-          promptSel ? { promptName: promptSel } : {},
-        );
-        acc.push({ ...data, key: data.analysisId });
-      } catch (e: any) {
-        acc.push({
-          key: `err-${id}`,
-          conversationId: id,
-          analysisId: "",
-          promptName: "",
-          status: "error",
-          analysis: {},
-          hasCanon: false,
-          vsCanon: { verdict: "incomparable", changes: [] },
-          error: e?.response?.data?.error ?? "échec",
-        });
+    // Pool à concurrence fixe. JS mono-thread + aucun `await` avant le tirage
+    // d'index ⇒ `cursor++` / `completed++` / `results[i] =` atomiques entre
+    // workers : pas de lock. `results` indexé par position préserve l'ordre
+    // de saisie ; `completed`/`results` (pas d'updater fonctionnel) = source
+    // de vérité, `setDone`/`setRows` ne font que la refléter.
+    const results: (Row | undefined)[] = new Array(list.length);
+    let cursor = 0;
+    let completed = 0;
+    const worker = async () => {
+      for (let i = cursor++; i < list.length; i = cursor++) {
+        const id = list[i];
+        try {
+          const { data } = await http.post<AnalyzeResp>(
+            `/analyze/${id}`,
+            promptSel ? { promptName: promptSel } : {},
+          );
+          results[i] = { ...data, key: data.analysisId };
+        } catch (e: any) {
+          results[i] = {
+            key: `err-${id}`,
+            conversationId: id,
+            analysisId: "",
+            promptName: "",
+            status: "error",
+            analysis: {},
+            hasCanon: false,
+            vsCanon: { verdict: "incomparable", changes: [] },
+            error: e?.response?.data?.error ?? "échec",
+          };
+        }
+        completed++;
+        setDone(completed);
+        setRows(results.filter((r): r is Row => !!r));
       }
-      setDone(i + 1);
-      setRows([...acc]);
-    }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(MAX_CONCURRENCY, list.length) }, worker),
+    );
     setRunning(false);
     message.success("Analyse terminée");
   };
