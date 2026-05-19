@@ -24,6 +24,17 @@ export interface AnalyzeResp {
   vsCanon: VsCanon;
 }
 
+// Message structuré du transcript (cf. conversationFormatter.ts côté serveur).
+// Tolérant : les anciens transcripts non re-analysés sont des strings brutes.
+export interface ConvMsg {
+  role: "LEAD" | "SENDER";
+  at: number;
+  channel: "LINKEDIN" | "EMAIL" | "OTHER";
+  subject?: string;
+  text: string;
+}
+export type TranscriptItem = ConvMsg | string;
+
 export interface ConvListRow {
   conversation_id: string;
   is_favorite: boolean;
@@ -39,7 +50,7 @@ export interface AnalysisRow {
   is_canon: boolean;
   created_at: string;
   payload: {
-    conversation: string[];
+    conversation: TranscriptItem[];
     analysis: Record<string, unknown>;
   };
 }
@@ -57,7 +68,7 @@ export interface ReplyRowApi {
 export interface ConvDetail {
   conversation_id: string;
   is_favorite: boolean;
-  transcript: string[];
+  transcript: TranscriptItem[];
   analyses: AnalysisRow[];
   replies: ReplyRowApi[];
 }

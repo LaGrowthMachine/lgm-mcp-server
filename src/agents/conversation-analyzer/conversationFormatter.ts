@@ -76,7 +76,45 @@ const pickTimestamp = (m: RawMessage): number => {
   return 0;
 };
 
+export type Channel = "LINKEDIN" | "EMAIL" | "OTHER";
+
+const pickChannel = (m: RawMessage): Channel => {
+  const nested =
+    typeof m.content === "object" && m.content !== null
+      ? (m.content as Record<string, unknown>)
+      : undefined;
+  const raw =
+    (typeof m.type === "string" && m.type) ||
+    (typeof nested?.channel === "string" && (nested.channel as string)) ||
+    (typeof m.channel === "string" && m.channel) ||
+    "";
+  const c = raw.toUpperCase();
+  if (c === "LINKEDIN") return "LINKEDIN";
+  if (c === "EMAIL") return "EMAIL";
+  return "OTHER";
+};
+
+const pickSubject = (m: RawMessage): string | undefined => {
+  const nested =
+    typeof m.content === "object" && m.content !== null
+      ? (m.content as Record<string, unknown>)
+      : undefined;
+  const s = nested?.subject ?? m.subject;
+  return typeof s === "string" && s.trim() ? s.trim() : undefined;
+};
+
+// Message structuré : source de vérité unique. L'inférence en dérive un
+// rendu texte (renderConversationForInference), l'UI en dérive des bulles.
+export interface ConvMsg {
+  role: "LEAD" | "SENDER";
+  at: number; // epoch ms (0 si inconnu)
+  channel: Channel;
+  subject?: string; // emails seulement
+  text: string;
+}
+
 export interface FormattedConversation {
+  messages: ConvMsg[];
   lines: string[];
   messageCount: number;
   lastIsLead: boolean;
@@ -112,6 +150,7 @@ export const formatConversationForClassifier = (
     .map(({ m }) => m);
 
   const lines: string[] = [];
+  const structured: ConvMsg[] = [];
   let lastIsLead = false;
   let hasLead = false;
   for (const m of sorted) {
@@ -124,16 +163,48 @@ export const formatConversationForClassifier = (
       );
       continue;
     }
+    const role: ConvMsg["role"] = fromLead ? "LEAD" : "SENDER";
     const indented = text.replace(/\n/g, "\n  ");
-    lines.push(`${fromLead ? "LEAD" : "SENDER"}: ${indented}`);
+    lines.push(`${role}: ${indented}`);
+    const subject = pickSubject(m);
+    structured.push({
+      role,
+      at: pickTimestamp(m),
+      channel: pickChannel(m),
+      ...(subject ? { subject } : {}),
+      text,
+    });
     lastIsLead = fromLead;
     if (fromLead) hasLead = true;
   }
 
   return {
+    messages: structured,
     lines,
     messageCount: lines.length,
     lastIsLead,
     hasLead,
   };
+};
+
+// epoch ms → "2023-05-24 14:32" (UTC, déterministe). "" si inconnu.
+const fmtAt = (at: number): string =>
+  at > 0 ? new Date(at).toISOString().slice(0, 16).replace("T", " ") : "";
+
+// Rendu texte injecté dans l'inférence (analyzer + reply). On conserve la
+// nomenclature LEAD/SENDER en tête de ligne — le classifieur clé dessus —
+// en ajoutant date + canal (+ sujet email) comme contexte.
+export const renderConversationForInference = (
+  messages: ConvMsg[],
+): string => {
+  return messages
+    .map((m) => {
+      const meta = [fmtAt(m.at), m.channel === "OTHER" ? "" : m.channel]
+        .filter(Boolean)
+        .concat(m.subject ? [`Suj: "${m.subject}"`] : []);
+      const header = `${m.role}${meta.length ? ` · ${meta.join(" · ")}` : ""}`;
+      const body = m.text.replace(/\n/g, "\n  ");
+      return `${header}\n  ${body}`;
+    })
+    .join("\n\n");
 };

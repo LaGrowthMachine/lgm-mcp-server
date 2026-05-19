@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import { McpFlowError } from "../../callFlow";
 import { fetchConversationMessages } from "./messageFetcher";
-import { formatConversationForClassifier } from "./conversationFormatter";
+import {
+  formatConversationForClassifier,
+  renderConversationForInference,
+  ConvMsg,
+} from "./conversationFormatter";
 import {
   buildClassifierSystemPrompt,
   CONVERSATION_CLASSIFIER_VERSION,
@@ -17,7 +21,7 @@ import { inferStructured } from "./inference";
 // (L'app d'éval, dans eval-app/, a son propre adaptateur DB-prompt.)
 
 export type AnalyzeResult = {
-  conversation: string[];
+  conversation: ConvMsg[];
   analysis:
     | { status: "skipped"; reason: string; messageCount: number }
     | {
@@ -42,7 +46,7 @@ export const analyzeConversation = async (
 
   if (formatted.messageCount === 0) {
     return {
-      conversation: formatted.lines,
+      conversation: formatted.messages,
       analysis: {
         status: "skipped",
         reason: "Conversation has no readable messages.",
@@ -53,7 +57,7 @@ export const analyzeConversation = async (
 
   if (!formatted.hasLead) {
     return {
-      conversation: formatted.lines,
+      conversation: formatted.messages,
       analysis: {
         status: "skipped",
         reason: "Conversation has no lead messages. Nothing to classify.",
@@ -64,7 +68,9 @@ export const analyzeConversation = async (
 
   const delimiter = crypto.randomBytes(8).toString("hex");
   const systemPrompt = buildClassifierSystemPrompt(delimiter);
-  const userMessage = `<CONVERSATION_${delimiter}>\n${formatted.lines.join("\n\n")}\n</CONVERSATION_${delimiter}>`;
+  const userMessage = `<CONVERSATION_${delimiter}>\n${renderConversationForInference(
+    formatted.messages,
+  )}\n</CONVERSATION_${delimiter}>`;
 
   const classification = await inferStructured<Record<string, unknown>>({
     systemPrompt,
@@ -75,7 +81,7 @@ export const analyzeConversation = async (
   });
 
   return {
-    conversation: formatted.lines,
+    conversation: formatted.messages,
     analysis: {
       status: "ok",
       promptVersion: CONVERSATION_CLASSIFIER_VERSION,

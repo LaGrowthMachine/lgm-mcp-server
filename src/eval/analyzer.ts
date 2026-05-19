@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { fetchConversationMessages } from "../agents/conversation-analyzer/messageFetcher";
-import { formatConversationForClassifier } from "../agents/conversation-analyzer/conversationFormatter";
+import {
+  formatConversationForClassifier,
+  renderConversationForInference,
+  ConvMsg,
+} from "../agents/conversation-analyzer/conversationFormatter";
 import {
   CLASSIFIER_TOOL_NAME,
   CLASSIFIER_TOOL_DESCRIPTION,
@@ -19,7 +23,7 @@ import {
 // (contrat déterministe — ce n'est pas "le prompt" qu'on itère).
 
 export type AnalyzeResult = {
-  conversation: string[];
+  conversation: ConvMsg[];
   promptName: string;
   analysis:
     | { status: "skipped"; reason: string; messageCount: number }
@@ -59,7 +63,7 @@ export const analyzeConversationWithDbPrompt = async (
 
   if (formatted.messageCount === 0) {
     return {
-      conversation: formatted.lines,
+      conversation: formatted.messages,
       promptName: prompt.name,
       analysis: {
         status: "skipped",
@@ -70,7 +74,7 @@ export const analyzeConversationWithDbPrompt = async (
   }
   if (!formatted.hasLead) {
     return {
-      conversation: formatted.lines,
+      conversation: formatted.messages,
       promptName: prompt.name,
       analysis: {
         status: "skipped",
@@ -82,8 +86,8 @@ export const analyzeConversationWithDbPrompt = async (
 
   const delimiter = crypto.randomBytes(8).toString("hex");
   const systemPrompt = prompt.body.split("{{DELIMITER}}").join(delimiter);
-  const userMessage = `<CONVERSATION_${delimiter}>\n${formatted.lines.join(
-    "\n\n",
+  const userMessage = `<CONVERSATION_${delimiter}>\n${renderConversationForInference(
+    formatted.messages,
   )}\n</CONVERSATION_${delimiter}>`;
 
   const classification = await inferStructured<Record<string, unknown>>({
@@ -95,7 +99,7 @@ export const analyzeConversationWithDbPrompt = async (
   });
 
   return {
-    conversation: formatted.lines,
+    conversation: formatted.messages,
     promptName: prompt.name,
     analysis: {
       status: "ok",

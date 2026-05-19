@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { fetchConversationMessages } from "../agents/conversation-analyzer/messageFetcher";
-import { formatConversationForClassifier } from "../agents/conversation-analyzer/conversationFormatter";
+import {
+  formatConversationForClassifier,
+  renderConversationForInference,
+  ConvMsg,
+} from "../agents/conversation-analyzer/conversationFormatter";
 import { inferText } from "../agents/conversation-analyzer/inference";
 import { getActivePrompt } from "./db";
 import {
@@ -18,7 +22,7 @@ import {
 // l'analyzer. AUCUN tool MCP n'est exposé : la génération vit côté eval.
 
 export type GenerateReplyResult = {
-  conversation: string[];
+  conversation: ConvMsg[];
   promptName: string;
   result:
     | { status: "skipped"; reason: string; messageCount: number }
@@ -52,7 +56,7 @@ export const generateReply = async (
 
   if (formatted.messageCount === 0) {
     return {
-      conversation: formatted.lines,
+      conversation: formatted.messages,
       promptName: prompt.name,
       result: {
         status: "skipped",
@@ -63,7 +67,7 @@ export const generateReply = async (
   }
   if (!formatted.hasLead) {
     return {
-      conversation: formatted.lines,
+      conversation: formatted.messages,
       promptName: prompt.name,
       result: {
         status: "skipped",
@@ -80,14 +84,14 @@ export const generateReply = async (
   const userMessage = [
     renderReplyContext(context),
     `<CONVERSATION_${delimiter}>`,
-    formatted.lines.join("\n\n"),
+    renderConversationForInference(formatted.messages),
     `</CONVERSATION_${delimiter}>`,
   ].join("\n\n");
 
   const replyText = await inferText({ systemPrompt, userMessage });
 
   return {
-    conversation: formatted.lines,
+    conversation: formatted.messages,
     promptName: prompt.name,
     result: { status: "ok", replyText, context },
   };

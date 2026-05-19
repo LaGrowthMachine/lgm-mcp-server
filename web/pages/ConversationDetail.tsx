@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Typography,
   Card,
@@ -18,8 +18,136 @@ import {
 } from "@ant-design/icons";
 import { Segmented } from "antd";
 import { useParams, useNavigate } from "react-router-dom";
-import { http, ConvDetail, ReplyRowApi, AnalysisRow } from "../api";
+import {
+  http,
+  ConvDetail,
+  ReplyRowApi,
+  AnalysisRow,
+  TranscriptItem,
+} from "../api";
 import { diffLines, DiffLine } from "../lineDiff";
+
+// "2023-05-24 14:32" (epoch ms) → libellé court fr. "" si inconnu.
+const fmtWhen = (at: number): string =>
+  at > 0
+    ? new Date(at).toLocaleString("fr-FR", {
+        dateStyle: "short",
+        timeStyle: "short",
+      })
+    : "";
+
+// Une bulle de conversation. LEAD (le prospect) à droite ; SENDER (nous)
+// à gauche. La couleur suit le RÔLE (SENDER vert marque, LEAD gris),
+// indépendamment du côté ; le « bec » de la bulle suit le côté.
+function Bubble({
+  right,
+  role,
+  text,
+  meta,
+}: {
+  right: boolean;
+  role: string;
+  text: string;
+  meta: string;
+}) {
+  const isSender = role === "SENDER";
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: right ? "flex-end" : "flex-start",
+      }}
+    >
+      <div
+        style={{
+          maxWidth: "78%",
+          background: isSender ? "#e6f4ea" : "#f3f4f6",
+          border: `1px solid ${isSender ? "#bfe3cd" : "#e5e7eb"}`,
+          color: "#1f2328",
+          padding: "8px 12px",
+          borderRadius: 12,
+          borderBottomRightRadius: right ? 3 : 12,
+          borderBottomLeftRadius: right ? 12 : 3,
+          whiteSpace: "pre-wrap",
+          fontSize: 13,
+          lineHeight: 1.5,
+          wordBreak: "break-word",
+        }}
+      >
+        {text}
+      </div>
+      <Typography.Text
+        type="secondary"
+        style={{ fontSize: 11, marginTop: 3, padding: "0 4px" }}
+      >
+        {[role, meta].filter(Boolean).join(" · ")}
+      </Typography.Text>
+    </div>
+  );
+}
+
+// Vue conversation : conteneur scrollable, auto-scrollé en bas au chargement.
+// Tolérant aux anciens transcripts (éléments string non structurés).
+function ChatTranscript({ items }: { items: TranscriptItem[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [items]);
+
+  return (
+    <div
+      ref={scrollRef}
+      style={{
+        maxHeight: "70vh",
+        overflow: "auto",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        padding: "4px 2px",
+      }}
+    >
+      {items.length === 0 && (
+        <Typography.Text type="secondary">
+          Aucun message lisible.
+        </Typography.Text>
+      )}
+      {items.map((m, i) => {
+        if (typeof m === "string") {
+          const isSender = m.startsWith("SENDER");
+          const isLead = m.startsWith("LEAD");
+          const text = m.replace(/^(LEAD|SENDER):\s?/, "");
+          return (
+            <Bubble
+              key={i}
+              right={isLead}
+              role={isSender ? "SENDER" : isLead ? "LEAD" : ""}
+              text={text}
+              meta=""
+            />
+          );
+        }
+        const meta = [
+          fmtWhen(m.at),
+          m.channel !== "OTHER" ? m.channel : "",
+          m.subject ? `Suj : ${m.subject}` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        return (
+          <Bubble
+            key={i}
+            right={m.role === "LEAD"}
+            role={m.role}
+            text={m.text}
+            meta={meta}
+          />
+        );
+      })}
+    </div>
+  );
+}
 
 // JSON complet (mode « brut »).
 const analysisJson = (a: AnalysisRow): string =>
@@ -234,43 +362,45 @@ export function ConversationDetail() {
       </Typography.Title>
 
       <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
-        <Card title="Transcript" size="small" style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              whiteSpace: "pre-wrap",
-              fontFamily: "ui-monospace, monospace",
-              fontSize: 12.5,
-              maxHeight: "70vh",
-              overflow: "auto",
-            }}
-          >
-            {data.transcript.join("\n\n")}
-          </div>
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+          }}
+        >
+          <Card title="Conversation" size="small">
+            <ChatTranscript items={data.transcript} />
+          </Card>
+
           {favorite && (
-            <div
-              style={{
-                marginTop: 16,
-                padding: 12,
-                border: "1px dashed #1f9d57",
-                borderRadius: 6,
-                background: "#f2fbf5",
-              }}
+            <Card
+              size="small"
+              style={{ borderColor: "#1f9d57" }}
+              title={
+                <Space>
+                  <Tag color="gold">RÉPONSE RETENUE</Tag>
+                  <span>prompt {favorite.prompt_name}</span>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {new Date(favorite.created_at).toLocaleString("fr-FR")}
+                  </Typography.Text>
+                </Space>
+              }
             >
-              <Typography.Text strong style={{ color: "#1f7a45" }}>
-                ↳ Réponse retenue (favorite) — prompt {favorite.prompt_name}
-              </Typography.Text>
               <div
                 style={{
                   whiteSpace: "pre-wrap",
                   fontSize: 13,
-                  marginTop: 6,
+                  lineHeight: 1.5,
                 }}
               >
                 {favorite.reply_text}
               </div>
-            </div>
+            </Card>
           )}
-        </Card>
+        </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <Typography.Title level={5}>

@@ -3,6 +3,11 @@ import {
   buildClassifierSystemPrompt,
   CONVERSATION_CLASSIFIER_VERSION,
 } from "../agents/conversation-analyzer/conversationClassifier";
+import { ConvMsg } from "../agents/conversation-analyzer/conversationFormatter";
+
+// Le transcript stocké : nouveau format structuré. Tolérant en lecture aux
+// anciennes lignes string[] (transcripts antérieurs, non re-analysés).
+export type TranscriptItem = ConvMsg | string;
 import {
   CODE_DEFAULT_REPLY_PROMPT_BODY,
   CODE_DEFAULT_REPLY_PROMPT_NAME,
@@ -262,7 +267,7 @@ export const activatePrompt = async (
 // ---------- conversations + analyses ----------
 export const upsertConversation = async (
   conversationId: string,
-  transcript: string[],
+  transcript: ConvMsg[],
 ): Promise<void> => {
   await getPool().query(
     `INSERT INTO conversations (conversation_id, transcript)
@@ -347,7 +352,7 @@ export const getConversationDetail = async (
 ): Promise<{
   conversation_id: string;
   is_favorite: boolean;
-  transcript: string[];
+  transcript: TranscriptItem[];
   analyses: AnalysisRow[];
   replies: ReplyRow[];
 } | null> => {

@@ -1,4 +1,7 @@
-import { formatConversationForClassifier } from "./conversationFormatter";
+import {
+  formatConversationForClassifier,
+  renderConversationForInference,
+} from "./conversationFormatter";
 
 describe("formatConversationForClassifier — DB shape", () => {
   it("treats status RECEIVED as lead and SENT as sender", () => {
@@ -147,5 +150,113 @@ describe("formatConversationForClassifier — DB shape", () => {
     expect(result.messageCount).toBe(2);
     expect(result.lastIsLead).toBe(true);
     expect(result.lines).toEqual(["SENDER: outbound", "LEAD: inbound"]);
+  });
+});
+
+describe("formatConversationForClassifier — structured messages", () => {
+  it("emits a structured ConvMsg[] with role, timestamp, channel", () => {
+    const messages = [
+      {
+        status: "SENT",
+        type: "LINKEDIN",
+        createdAt: 1684927576437,
+        content: { message: "Bonjour Fabrice" },
+      },
+      {
+        status: "RECEIVED",
+        type: "EMAIL",
+        createdAt: 1684936639820,
+        content: { subject: "RE: GMAO", message: "Oui, intéressé" },
+      },
+    ];
+    const r = formatConversationForClassifier(messages);
+    expect(r.messages).toEqual([
+      {
+        role: "SENDER",
+        at: 1684927576437,
+        channel: "LINKEDIN",
+        text: "Bonjour Fabrice",
+      },
+      {
+        role: "LEAD",
+        at: 1684936639820,
+        channel: "EMAIL",
+        subject: "RE: GMAO",
+        text: "Oui, intéressé",
+      },
+    ]);
+  });
+
+  it("falls back to channel OTHER and at=0 when unknown", () => {
+    const r = formatConversationForClassifier([
+      { direction: "out", body: "no type, no createdAt" },
+    ]);
+    expect(r.messages[0]).toMatchObject({
+      role: "SENDER",
+      at: 0,
+      channel: "OTHER",
+      text: "no type, no createdAt",
+    });
+    expect(r.messages[0]).not.toHaveProperty("subject");
+  });
+
+  it("keeps messages and lines in the same order", () => {
+    const r = formatConversationForClassifier([
+      { status: "RECEIVED", createdAt: 3000, content: { message: "third" } },
+      { status: "SENT", createdAt: 1000, content: { message: "first" } },
+      { status: "RECEIVED", createdAt: 2000, content: { message: "second" } },
+    ]);
+    expect(r.messages.map((m) => m.text)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+    expect(r.messages.map((m) => m.role)).toEqual([
+      "SENDER",
+      "LEAD",
+      "LEAD",
+    ]);
+  });
+});
+
+describe("renderConversationForInference", () => {
+  it("anchors each block on the LEAD/SENDER role token with date+channel", () => {
+    const out = renderConversationForInference([
+      {
+        role: "SENDER",
+        at: 1684927576437,
+        channel: "LINKEDIN",
+        text: "Bonjour",
+      },
+      {
+        role: "LEAD",
+        at: 1684936639820,
+        channel: "EMAIL",
+        subject: "RE: GMAO",
+        text: "Oui",
+      },
+    ]);
+    const blocks = out.split("\n\n");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toBe(
+      "SENDER · 2023-05-24 11:26 · LINKEDIN\n  Bonjour",
+    );
+    expect(blocks[1]).toBe(
+      'LEAD · 2023-05-24 13:57 · EMAIL · Suj: "RE: GMAO"\n  Oui',
+    );
+  });
+
+  it("omits date when timestamp is unknown (at=0)", () => {
+    const out = renderConversationForInference([
+      { role: "LEAD", at: 0, channel: "OTHER", text: "hi" },
+    ]);
+    expect(out).toBe("LEAD\n  hi");
+  });
+
+  it("indents multi-line message bodies", () => {
+    const out = renderConversationForInference([
+      { role: "LEAD", at: 0, channel: "OTHER", text: "line1\nline2" },
+    ]);
+    expect(out).toBe("LEAD\n  line1\n  line2");
   });
 });
