@@ -120,6 +120,19 @@ export const ensureSchema = async (): Promise<void> => {
     END $$;
   `);
 
+  // Cycle de vie prompt : draft (éditable) | validated (figé, sens unique).
+  // Migration idempotente : colonne 'status' (défaut 'draft'), puis backfill
+  // unique → le prompt actif de chaque famille devient 'validated' (il est
+  // « en prod » ; seul un validated peut être actif). Le reste reste 'draft'.
+  await p.query(`
+    ALTER TABLE prompts
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+    ALTER TABLE prompts
+      ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ;
+    UPDATE prompts SET status = 'validated', validated_at = now()
+      WHERE is_active AND status <> 'validated';
+  `);
+
   // Seed par famille : défaut analysis (classifier) + défaut reply (playbook
   // DG), chacun actif si sa famille est vide.
   const seed = async (
@@ -133,11 +146,11 @@ export const ensureSchema = async (): Promise<void> => {
     );
     if (rows[0].n === "0") {
       await p.query(
-        `INSERT INTO prompts (kind, name, body, is_active)
-         VALUES ($1, $2, $3, true)`,
+        `INSERT INTO prompts (kind, name, body, is_active, status, validated_at)
+         VALUES ($1, $2, $3, true, 'validated', now())`,
         [kind, name, body],
       );
-      console.error(`[db] seed prompt ${kind} "${name}" (actif)`);
+      console.error(`[db] seed prompt ${kind} "${name}" (validé, live)`);
     }
   };
   await seed("analysis", CODE_DEFAULT_PROMPT_NAME, CODE_DEFAULT_PROMPT_BODY);
@@ -149,11 +162,20 @@ export const ensureSchema = async (): Promise<void> => {
 };
 
 // ---------- prompts ----------
+// Cycle de vie : 'draft' (éditable, testable via run ad-hoc) → 'validated'
+// (figé, sens unique). Le prompt « live » (MCP + défaut éval) = le DERNIER
+// validé de la famille (max(validated_at)). Pas de flag « actif » séparé :
+// valider promeut implicitement. Rollback = supprimer le validé fautif (le
+// précédent redevient live) ou cloner un ancien en brouillon puis revalider.
+export type PromptStatus = "draft" | "validated";
+
 export interface PromptRow {
   kind: PromptKind;
   name: string;
   body: string;
-  is_active: boolean;
+  is_active: boolean; // vestige (legacy/seed) — non utilisé pour la sélection
+  status: PromptStatus;
+  validated_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -162,10 +184,15 @@ export interface PromptRow {
 // (analyzer.ts appelle getActivePrompt() sans argument).
 export const listPrompts = async (
   kind: PromptKind = "analysis",
-): Promise<Omit<PromptRow, "body">[]> => {
+): Promise<(Omit<PromptRow, "body"> & { used: boolean })[]> => {
+  const usedTable = kind === "reply" ? "replies" : "analyses";
   const { rows } = await getPool().query(
-    `SELECT kind, name, is_active, created_at, updated_at
-     FROM prompts WHERE kind = $1 ORDER BY created_at DESC`,
+    `SELECT p.kind, p.name, p.is_active, p.status, p.validated_at,
+            p.created_at, p.updated_at,
+            EXISTS(
+              SELECT 1 FROM ${usedTable} u WHERE u.prompt_name = p.name
+            ) AS used
+     FROM prompts p WHERE p.kind = $1 ORDER BY p.created_at DESC`,
     [kind],
   );
   return rows;
@@ -182,6 +209,8 @@ export const getPrompt = async (
   return rows[0] ?? null;
 };
 
+// Prompt « live » = le prompt explicitement promu (1 seul par famille, flag
+// is_active). Utilisé par le tool MCP ET comme défaut de l'app d'éval.
 export const getActivePrompt = async (
   kind: PromptKind = "analysis",
 ): Promise<PromptRow | null> => {
@@ -192,7 +221,24 @@ export const getActivePrompt = async (
   return rows[0] ?? null;
 };
 
-// Nom suivant : max(nom numérique) + 1 dans la famille, défaut "1".
+// Un prompt est « utilisé » dès qu'une analyse/réponse porte son nom →
+// non supprimable (traçabilité). L'édition reste régie par le statut.
+export const isPromptUsed = async (
+  name: string,
+  kind: PromptKind = "analysis",
+): Promise<boolean> => {
+  const table = kind === "reply" ? "replies" : "analyses";
+  const { rows } = await getPool().query<{ used: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM ${table} WHERE prompt_name = $1
+     ) AS used`,
+    [name],
+  );
+  return rows[0]?.used ?? false;
+};
+
+// Nom suivant harmonisé `vN` : on prend le plus grand suffixe numérique
+// parmi les noms `vN` OU `N` (compat ancien) dans la famille, +1. Défaut "v1".
 export const nextPromptName = async (
   kind: PromptKind = "analysis",
 ): Promise<string> => {
@@ -202,10 +248,13 @@ export const nextPromptName = async (
   );
   let max = 0;
   for (const r of rows) {
-    const n = parseInt(r.name, 10);
-    if (Number.isFinite(n) && n > max) max = n;
+    const m = /^v?(\d+)$/i.exec(r.name.trim());
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
   }
-  return String(max + 1);
+  return `v${max + 1}`;
 };
 
 export const createPrompt = async (
@@ -219,15 +268,19 @@ export const createPrompt = async (
   );
 };
 
+// Édition autorisée UNIQUEMENT sur un brouillon. Renvoie false si le prompt
+// est validé (figé) ou introuvable → la route répond 409/404.
 export const updatePrompt = async (
   name: string,
   body: string,
   kind: PromptKind = "analysis",
-): Promise<void> => {
-  await getPool().query(
-    "UPDATE prompts SET body = $3, updated_at = now() WHERE kind = $1 AND name = $2",
+): Promise<boolean> => {
+  const { rowCount } = await getPool().query(
+    `UPDATE prompts SET body = $3, updated_at = now()
+     WHERE kind = $1 AND name = $2 AND status = 'draft'`,
     [kind, name, body],
   );
+  return (rowCount ?? 0) > 0;
 };
 
 export const deletePrompt = async (
@@ -240,13 +293,56 @@ export const deletePrompt = async (
   ]);
 };
 
-export const activatePrompt = async (
+// Valide un brouillon (sens unique → contenu figé). NE met PAS live :
+// la mise en live est une action explicite séparée (setLivePrompt).
+// Renvoie false si déjà validé / introuvable → route 409/404.
+export const validatePrompt = async (
   name: string,
   kind: PromptKind = "analysis",
-): Promise<void> => {
+): Promise<boolean> => {
+  const { rowCount } = await getPool().query(
+    `UPDATE prompts SET status = 'validated', validated_at = now(),
+            updated_at = now()
+     WHERE kind = $1 AND name = $2 AND status = 'draft'`,
+    [kind, name],
+  );
+  return (rowCount ?? 0) > 0;
+};
+
+// Clone n'importe quel prompt en NOUVEAU brouillon `vN+1` (pour itérer à
+// partir d'un validé figé). Renvoie le nom créé, ou null si source absente.
+export const clonePrompt = async (
+  srcName: string,
+  kind: PromptKind = "analysis",
+): Promise<string | null> => {
+  const src = await getPrompt(srcName, kind);
+  if (!src) return null;
+  const name = await nextPromptName(kind);
+  await getPool().query(
+    "INSERT INTO prompts (kind, name, body, status) VALUES ($1, $2, $3, 'draft')",
+    [kind, name, src.body],
+  );
+  return name;
+};
+
+// Met un prompt « live » (1 seul par famille). Seul un `validated` peut
+// l'être. Atomique : dé-live l'ancien, live le nouveau. Renvoie false si
+// introuvable OU non validé → route 409/404.
+export const setLivePrompt = async (
+  name: string,
+  kind: PromptKind = "analysis",
+): Promise<boolean> => {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    const { rows } = await client.query<{ status: string }>(
+      "SELECT status FROM prompts WHERE kind = $1 AND name = $2",
+      [kind, name],
+    );
+    if (rows.length === 0 || rows[0].status !== "validated") {
+      await client.query("ROLLBACK");
+      return false;
+    }
     await client.query(
       "UPDATE prompts SET is_active = false WHERE kind = $1 AND is_active",
       [kind],
@@ -256,6 +352,7 @@ export const activatePrompt = async (
       [kind, name],
     );
     await client.query("COMMIT");
+    return true;
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;

@@ -99,7 +99,10 @@ evalRouter.post(
       res.status(400).json({ error: "conversationId invalide" });
       return;
     }
-    const result = await analyzeConversationWithDbPrompt(id);
+    const promptName = req.body?.promptName
+      ? String(req.body.promptName)
+      : undefined;
+    const result = await analyzeConversationWithDbPrompt(id, promptName);
     await db.upsertConversation(id, result.conversation);
     const payload = {
       conversation: result.conversation,
@@ -224,7 +227,10 @@ evalRouter.post(
       res.status(400).json({ error: "conversationId invalide" });
       return;
     }
-    const gen = await generateReply(id);
+    const promptName = req.body?.promptName
+      ? String(req.body.promptName)
+      : undefined;
+    const gen = await generateReply(id, promptName);
     await db.upsertConversation(id, gen.conversation);
 
     if (gen.result.status === "skipped") {
@@ -381,21 +387,48 @@ evalRouter.put(
       res.status(404).json({ error: "prompt inconnu" });
       return;
     }
-    await db.updatePrompt(name, String(req.body?.body ?? ""), kind);
+    const ok = await db.updatePrompt(name, String(req.body?.body ?? ""), kind);
+    if (!ok) {
+      res
+        .status(409)
+        .json({ error: "prompt validé (figé) — non modifiable" });
+      return;
+    }
     res.json({ ok: true });
   }),
 );
 
+// Suppression interdite si live OU déjà utilisé (traçabilité).
 evalRouter.delete(
   "/prompts/:name",
   wrap(async (req, res) => {
-    await db.deletePrompt(String(req.params.name), asKind(req.query.kind));
+    const kind = asKind(req.query.kind);
+    const name = String(req.params.name);
+    const p = await db.getPrompt(name, kind);
+    if (!p) {
+      res.status(404).json({ error: "prompt inconnu" });
+      return;
+    }
+    if (p.is_active) {
+      res
+        .status(409)
+        .json({ error: "prompt live — non supprimable" });
+      return;
+    }
+    if (await db.isPromptUsed(name, kind)) {
+      res.status(409).json({
+        error: "déjà utilisé (analyses/réponses) — non supprimable",
+      });
+      return;
+    }
+    await db.deletePrompt(name, kind);
     res.json({ ok: true });
   }),
 );
 
+// Valide un brouillon (sens unique) → contenu figé. NE met PAS live.
 evalRouter.post(
-  "/prompts/:name/activate",
+  "/prompts/:name/validate",
   wrap(async (req, res) => {
     const kind = asKind(req.body?.kind ?? req.query.kind);
     const name = String(req.params.name);
@@ -403,7 +436,47 @@ evalRouter.post(
       res.status(404).json({ error: "prompt inconnu" });
       return;
     }
-    await db.activatePrompt(name, kind);
+    const ok = await db.validatePrompt(name, kind);
+    if (!ok) {
+      res.status(409).json({ error: "déjà validé" });
+      return;
+    }
     res.json({ ok: true });
+  }),
+);
+
+// Met un prompt en live (1 seul/famille). Seul un validé peut l'être.
+evalRouter.post(
+  "/prompts/:name/live",
+  wrap(async (req, res) => {
+    const kind = asKind(req.body?.kind ?? req.query.kind);
+    const name = String(req.params.name);
+    if (!(await db.getPrompt(name, kind))) {
+      res.status(404).json({ error: "prompt inconnu" });
+      return;
+    }
+    const ok = await db.setLivePrompt(name, kind);
+    if (!ok) {
+      res
+        .status(409)
+        .json({ error: "seul un prompt validé peut être mis live" });
+      return;
+    }
+    res.json({ ok: true });
+  }),
+);
+
+// Clone un prompt en nouveau brouillon vN+1 (pour itérer depuis un validé).
+evalRouter.post(
+  "/prompts/:name/clone",
+  wrap(async (req, res) => {
+    const kind = asKind(req.body?.kind ?? req.query.kind);
+    const name = String(req.params.name);
+    const created = await db.clonePrompt(name, kind);
+    if (!created) {
+      res.status(404).json({ error: "prompt inconnu" });
+      return;
+    }
+    res.json({ ok: true, name: created });
   }),
 );

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Typography,
   Input,
@@ -9,9 +9,10 @@ import {
   Progress,
   App,
   Popconfirm,
+  Select,
 } from "antd";
 import { Link } from "react-router-dom";
-import { http, GenerateReplyResp } from "../api";
+import { http, GenerateReplyResp, PromptListItem } from "../api";
 
 interface Row extends GenerateReplyResp {
   key: string;
@@ -48,6 +49,15 @@ export function GenerateReplies() {
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(0);
   const [total, setTotal] = useState(0);
+  const [prompts, setPrompts] = useState<PromptListItem[]>([]);
+  const [promptSel, setPromptSel] = useState<string>(""); // "" = live
+
+  useEffect(() => {
+    http
+      .get("/prompts", { params: { kind: "reply" } })
+      .then(({ data }) => setPrompts(data.prompts))
+      .catch(() => {});
+  }, []);
 
   const runList = async (list: string[]) => {
     if (list.length === 0) {
@@ -62,7 +72,10 @@ export function GenerateReplies() {
     for (let i = 0; i < list.length; i++) {
       const id = list[i];
       try {
-        const { data } = await http.post<GenerateReplyResp>(`/reply/${id}`);
+        const { data } = await http.post<GenerateReplyResp>(
+          `/reply/${id}`,
+          promptSel ? { promptName: promptSel } : {},
+        );
         acc.push({ ...data, key: data.replyId ?? `sk-${id}` });
       } catch (e: any) {
         acc.push({
@@ -125,10 +138,10 @@ export function GenerateReplies() {
         Générer des réponses
       </Typography.Title>
       <Typography.Paragraph type="secondary">
-        Génère une réponse avec le <strong>prompt réponse actif</strong> (1
-        inférence / conv, comme l'analyse). Chaque réponse est comparée à la
-        réponse <strong>favoritée</strong> de la conv. Favorite-la pour qu'elle
-        devienne la référence.
+        Génère une réponse avec le prompt réponse <strong>live</strong> (dernier
+        validé) — ou un brouillon précis sélectionné ci-dessous, pour le tester
+        avant de le valider (1 inférence / conv). Chaque réponse est comparée à
+        la réponse <strong>favoritée</strong> de la conv.
       </Typography.Paragraph>
 
       <Input.TextArea
@@ -139,6 +152,18 @@ export function GenerateReplies() {
         style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
       />
       <Space wrap>
+        <Select
+          value={promptSel}
+          onChange={setPromptSel}
+          style={{ minWidth: 280 }}
+          options={[
+            { value: "", label: "Prompt live (dernier validé)" },
+            ...prompts.map((p) => ({
+              value: p.name,
+              label: `${p.name} — ${p.status === "validated" ? "validé" : "brouillon"}`,
+            })),
+          ]}
+        />
         <Button
           type="primary"
           loading={running}

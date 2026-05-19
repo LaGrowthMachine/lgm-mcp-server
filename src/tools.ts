@@ -4,8 +4,7 @@ import { z } from "zod";
 import { callFlow, McpFlowError } from "./callFlow";
 import { trackMcpEvent } from "./tracking";
 import { getApiKey } from "./requestContext";
-import { CONVERSATION_CLASSIFIER_VERSION } from "./agents/conversation-analyzer/conversationClassifier";
-import { analyzeConversation } from "./agents/conversation-analyzer/analyze";
+import { analyzeConversationWithDbPrompt } from "./eval/analyzer";
 import { assertLgmStaff } from "./agents/db-explorer/acl";
 import { runDbExplorerAgent } from "./agents/db-explorer/agentLoop";
 import { DB_EXPLORER_PROMPT_VERSION } from "./agents/db-explorer/prompt";
@@ -430,12 +429,14 @@ export const registerTools = (server: McpServer) => {
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
       try {
-        const result = await analyzeConversation(params.conversationId);
+        const result = await analyzeConversationWithDbPrompt(
+          params.conversationId,
+        );
 
         if (result.analysis.status === "ok") {
           await trackMcpEvent(apiKey, "mcp_tool_called", {
             toolName: "analyze_conversation",
-            promptVersion: CONVERSATION_CLASSIFIER_VERSION,
+            promptVersion: result.promptName,
           });
         }
 

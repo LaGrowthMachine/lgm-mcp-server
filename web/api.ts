@@ -94,11 +94,15 @@ export interface ReplyListItem {
 }
 
 export type PromptKind = "analysis" | "reply";
+export type PromptStatus = "draft" | "validated";
 
 export interface PromptListItem {
   kind: PromptKind;
   name: string;
-  is_active: boolean;
+  is_active: boolean; // = live (1 seul par famille)
+  status: PromptStatus;
+  used: boolean; // a produit ≥1 analyse/réponse → non supprimable
+  validated_at: string | null;
   created_at: string;
   updated_at: string;
 }

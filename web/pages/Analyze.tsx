@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Typography,
   Input,
@@ -10,9 +10,10 @@ import {
   App,
   Tooltip,
   Popconfirm,
+  Select,
 } from "antd";
 import { Link } from "react-router-dom";
-import { http, AnalyzeResp } from "../api";
+import { http, AnalyzeResp, PromptListItem } from "../api";
 
 interface Row extends AnalyzeResp {
   key: string;
@@ -47,6 +48,15 @@ export function Analyze() {
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(0);
   const [total, setTotal] = useState(0);
+  const [prompts, setPrompts] = useState<PromptListItem[]>([]);
+  const [promptSel, setPromptSel] = useState<string>(""); // "" = live
+
+  useEffect(() => {
+    http
+      .get("/prompts", { params: { kind: "analysis" } })
+      .then(({ data }) => setPrompts(data.prompts))
+      .catch(() => {});
+  }, []);
 
   const runList = async (list: string[]) => {
     if (list.length === 0) {
@@ -61,7 +71,10 @@ export function Analyze() {
     for (let i = 0; i < list.length; i++) {
       const id = list[i];
       try {
-        const { data } = await http.post<AnalyzeResp>(`/analyze/${id}`);
+        const { data } = await http.post<AnalyzeResp>(
+          `/analyze/${id}`,
+          promptSel ? { promptName: promptSel } : {},
+        );
         acc.push({ ...data, key: data.analysisId });
       } catch (e: any) {
         acc.push({
@@ -125,10 +138,11 @@ export function Analyze() {
         Analyse de conversations
       </Typography.Title>
       <Typography.Paragraph type="secondary">
-        Analyse avec le <strong>prompt actif</strong>. Chaque conv est créée /
-        mise à jour ; chaque analyse est comparée au canon validé (diff
-        déterministe, zéro inférence). Conserve l'analyse pour qu'elle devienne
-        le canon, ou supprime-la.
+        Analyse avec le prompt <strong>live</strong> (dernier validé) — ou un
+        brouillon précis sélectionné ci-dessous, pour le tester avant de le
+        valider. Chaque conv est créée / mise à jour ; chaque analyse est
+        comparée au canon validé (diff déterministe, zéro inférence). Conserve
+        l'analyse pour qu'elle devienne le canon, ou supprime-la.
       </Typography.Paragraph>
 
       <Input.TextArea
@@ -139,6 +153,18 @@ export function Analyze() {
         style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
       />
       <Space wrap>
+        <Select
+          value={promptSel}
+          onChange={setPromptSel}
+          style={{ minWidth: 280 }}
+          options={[
+            { value: "", label: "Prompt live (dernier validé)" },
+            ...prompts.map((p) => ({
+              value: p.name,
+              label: `${p.name} — ${p.status === "validated" ? "validé" : "brouillon"}`,
+            })),
+          ]}
+        />
         <Button
           type="primary"
           loading={running}

@@ -10,6 +10,7 @@ import {
   Popconfirm,
   App,
   Segmented,
+  Tooltip,
 } from "antd";
 import { http, PromptListItem, PromptKind } from "../api";
 
@@ -17,12 +18,12 @@ export function Prompts() {
   const { message } = App.useApp();
   const [kind, setKind] = useState<PromptKind>("analysis");
   const [list, setList] = useState<PromptListItem[]>([]);
-  const [active, setActive] = useState<string | null>(null);
-  const [nextName, setNextName] = useState("1");
+  const [nextName, setNextName] = useState("v1");
   const [loading, setLoading] = useState(false);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editMode, setEditMode] = useState<"create" | "edit">("create");
+  const [readOnly, setReadOnly] = useState(false);
   const [formName, setFormName] = useState("");
   const [formBody, setFormBody] = useState("");
   const [saving, setSaving] = useState(false);
@@ -32,7 +33,6 @@ export function Prompts() {
     try {
       const { data } = await http.get("/prompts", { params: { kind } });
       setList(data.prompts);
-      setActive(data.active);
       setNextName(data.nextName);
     } finally {
       setLoading(false);
@@ -45,6 +45,7 @@ export function Prompts() {
 
   const openCreate = () => {
     setEditMode("create");
+    setReadOnly(false);
     setFormName(nextName);
     setFormBody(
       "Colle ici le corps du prompt système.\n\n" +
@@ -54,10 +55,13 @@ export function Prompts() {
     setEditOpen(true);
   };
 
-  const openEdit = async (name: string) => {
-    const { data } = await http.get(`/prompts/${name}`, { params: { kind } });
+  const openEdit = async (r: PromptListItem) => {
+    const { data } = await http.get(`/prompts/${r.name}`, {
+      params: { kind },
+    });
     setEditMode("edit");
-    setFormName(name);
+    setReadOnly(r.status === "validated");
+    setFormName(r.name);
     setFormBody(data.body);
     setEditOpen(true);
   };
@@ -71,10 +75,10 @@ export function Prompts() {
           body: formBody,
           kind,
         });
-        message.success(`Prompt "${formName}" créé`);
+        message.success(`Brouillon "${formName}" créé`);
       } else {
         await http.put(`/prompts/${formName}`, { body: formBody, kind });
-        message.success(`Prompt "${formName}" mis à jour`);
+        message.success(`Brouillon "${formName}" mis à jour`);
       }
       setEditOpen(false);
       load();
@@ -85,10 +89,38 @@ export function Prompts() {
     }
   };
 
-  const activate = async (name: string) => {
-    await http.post(`/prompts/${name}/activate`, { kind });
-    message.success(`"${name}" est le prompt actif`);
-    load();
+  const validate = async (name: string) => {
+    try {
+      await http.post(`/prompts/${name}/validate`, { kind });
+      message.success(`"${name}" validé (figé). Mets-le « live » pour l'activer.`);
+      load();
+    } catch (e: any) {
+      message.error(e?.response?.data?.error ?? "Échec validation");
+    }
+  };
+
+  const setLive = async (name: string) => {
+    try {
+      await http.post(`/prompts/${name}/live`, { kind });
+      message.success(`"${name}" est le prompt live`);
+      load();
+    } catch (e: any) {
+      message.error(e?.response?.data?.error ?? "Échec mise en live");
+    }
+  };
+
+  const clone = async (name: string) => {
+    try {
+      const { data } = await http.post(`/prompts/${name}/clone`, { kind });
+      message.success(`Cloné en brouillon "${data.name}"`);
+      await load();
+      openEdit({
+        name: data.name,
+        status: "draft",
+      } as PromptListItem);
+    } catch (e: any) {
+      message.error(e?.response?.data?.error ?? "Échec clonage");
+    }
   };
 
   const del = async (name: string) => {
@@ -120,25 +152,9 @@ export function Prompts() {
             ]}
             style={{ marginBottom: 8 }}
           />
-          <Typography.Paragraph type="secondary" style={{ maxWidth: 640 }}>
-            {kind === "analysis" ? (
-              <>
-                Le prompt <strong>analyse</strong> actif est utilisé par la page
-                Analyse. Le schéma de sortie reste figé en code (contrat
-                déterministe) — ici on n'itère que le texte d'instructions.
-              </>
-            ) : (
-              <>
-                Le prompt <strong>réponse</strong> actif est utilisé par la page
-                Réponses et le bouton « Générer une réponse » d'une conv. v1 =
-                playbook fourni par le DG. La clé est le{" "}
-                <strong>nom = version</strong> (prérempli au max+1).
-              </>
-            )}
-          </Typography.Paragraph>
         </div>
         <Button type="primary" onClick={openCreate}>
-          + Nouveau prompt ({nextName})
+          + Nouveau brouillon ({nextName})
         </Button>
       </Space>
 
@@ -152,55 +168,96 @@ export function Prompts() {
           {
             title: "nom / version",
             dataIndex: "name",
-            render: (n: string) => (
+            render: (n: string, r: PromptListItem) => (
               <Space>
                 <strong>{n}</strong>
-                {n === active && <Tag color="green">ACTIF</Tag>}
+                {r.status === "validated" ? (
+                  <Tag color="green">VALIDÉ</Tag>
+                ) : (
+                  <Tag color="orange">BROUILLON</Tag>
+                )}
+                {r.is_active && <Tag color="blue">LIVE</Tag>}
+                {r.used && <Tag>utilisé</Tag>}
               </Space>
             ),
           },
           {
-            title: "créé",
-            dataIndex: "created_at",
-            width: 180,
-            render: (v: string) => new Date(v).toLocaleString("fr-FR"),
+            title: "validé le",
+            dataIndex: "validated_at",
+            width: 170,
+            render: (v: string | null) =>
+              v ? new Date(v).toLocaleString("fr-FR") : "—",
           },
           {
             title: "modifié",
             dataIndex: "updated_at",
-            width: 180,
+            width: 170,
             render: (v: string) => new Date(v).toLocaleString("fr-FR"),
           },
           {
             title: "actions",
-            width: 280,
-            render: (_: unknown, r: PromptListItem) => (
-              <Space>
-                <Button
-                  size="small"
-                  type="primary"
-                  disabled={r.name === active}
-                  onClick={() => activate(r.name)}
-                >
-                  Activer
-                </Button>
-                <Button size="small" onClick={() => openEdit(r.name)}>
-                  Éditer
-                </Button>
-                <Popconfirm
-                  title={
-                    r.name === active
-                      ? "C'est le prompt ACTIF — supprimer quand même ?"
-                      : "Supprimer ce prompt ?"
-                  }
-                  onConfirm={() => del(r.name)}
-                >
-                  <Button size="small" danger>
-                    Suppr.
+            width: 320,
+            render: (_: unknown, r: PromptListItem) => {
+              const lockReason = r.is_active
+                ? "Prompt live — non supprimable"
+                : r.used
+                  ? "Déjà utilisé (analyses/réponses) — non supprimable"
+                  : null;
+              return (
+                <Space wrap>
+                  {r.status === "draft" ? (
+                    <>
+                      <Button size="small" onClick={() => openEdit(r)}>
+                        Éditer
+                      </Button>
+                      <Popconfirm
+                        title="Valider ce prompt ? Contenu FIGÉ (sens unique). Il ne devient pas live automatiquement."
+                        onConfirm={() => validate(r.name)}
+                      >
+                        <Button size="small" type="primary">
+                          Valider
+                        </Button>
+                      </Popconfirm>
+                    </>
+                  ) : (
+                    <>
+                      <Button size="small" onClick={() => openEdit(r)}>
+                        Voir
+                      </Button>
+                      {!r.is_active && (
+                        <Popconfirm
+                          title="Mettre ce prompt en live ? Il remplacera le live actuel (défaut éval + tool MCP)."
+                          onConfirm={() => setLive(r.name)}
+                        >
+                          <Button size="small" type="primary">
+                            Mettre en live
+                          </Button>
+                        </Popconfirm>
+                      )}
+                    </>
+                  )}
+                  <Button size="small" onClick={() => clone(r.name)}>
+                    Cloner
                   </Button>
-                </Popconfirm>
-              </Space>
-            ),
+                  {lockReason ? (
+                    <Tooltip title={lockReason}>
+                      <Button size="small" danger disabled>
+                        Suppr.
+                      </Button>
+                    </Tooltip>
+                  ) : (
+                    <Popconfirm
+                      title="Supprimer ce prompt ?"
+                      onConfirm={() => del(r.name)}
+                    >
+                      <Button size="small" danger>
+                        Suppr.
+                      </Button>
+                    </Popconfirm>
+                  )}
+                </Space>
+              );
+            },
           },
         ]}
       />
@@ -208,14 +265,18 @@ export function Prompts() {
       <Modal
         title={
           editMode === "create"
-            ? "Nouveau prompt"
-            : `Éditer le prompt "${formName}"`
+            ? "Nouveau brouillon"
+            : readOnly
+              ? `Prompt "${formName}" (validé — lecture seule)`
+              : `Éditer le brouillon "${formName}"`
         }
         open={editOpen}
         onCancel={() => setEditOpen(false)}
         onOk={save}
         confirmLoading={saving}
         okText="Enregistrer"
+        okButtonProps={{ style: readOnly ? { display: "none" } : undefined }}
+        cancelText={readOnly ? "Fermer" : "Annuler"}
         width={900}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
@@ -232,6 +293,7 @@ export function Prompts() {
             <Typography.Text strong>Corps du prompt système</Typography.Text>
             <Input.TextArea
               value={formBody}
+              readOnly={readOnly}
               onChange={(e) => setFormBody(e.target.value)}
               autoSize={{ minRows: 16, maxRows: 30 }}
               style={{

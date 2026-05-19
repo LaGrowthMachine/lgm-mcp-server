@@ -6,7 +6,7 @@ import {
   ConvMsg,
 } from "../agents/conversation-analyzer/conversationFormatter";
 import { inferText } from "../agents/conversation-analyzer/inference";
-import { getActivePrompt } from "./db";
+import { getActivePrompt, getPrompt } from "./db";
 import {
   CODE_DEFAULT_REPLY_PROMPT_BODY,
   CODE_DEFAULT_REPLY_PROMPT_NAME,
@@ -29,12 +29,26 @@ export type GenerateReplyResult = {
     | { status: "ok"; replyText: string; context: ReplyContext };
 };
 
-const resolveActiveReplyPrompt = async (): Promise<{
-  name: string;
-  body: string;
-}> => {
-  const active = await getActivePrompt("reply");
-  if (active) return { name: active.name, body: active.body };
+// Run ad-hoc : `promptName` fourni → CE prompt réponse précis (brouillon
+// inclus, pour tester avant validation) ; sinon le prompt réponse live
+// (dernier validé) avec fallback playbook code (résilient si DB KO).
+const resolveReplyPrompt = async (
+  promptName?: string,
+): Promise<{ name: string; body: string }> => {
+  if (promptName) {
+    const p = await getPrompt(promptName, "reply");
+    if (!p) throw new Error(`prompt réponse "${promptName}" introuvable`);
+    return { name: p.name, body: p.body };
+  }
+  try {
+    const active = await getActivePrompt("reply");
+    if (active) return { name: active.name, body: active.body };
+  } catch (e) {
+    console.error(
+      "[reply] getActivePrompt KO → fallback playbook code:",
+      e instanceof Error ? e.message : e,
+    );
+  }
   return {
     name: CODE_DEFAULT_REPLY_PROMPT_NAME,
     body: CODE_DEFAULT_REPLY_PROMPT_BODY,
@@ -43,6 +57,7 @@ const resolveActiveReplyPrompt = async (): Promise<{
 
 export const generateReply = async (
   conversationId: string,
+  promptName?: string,
 ): Promise<GenerateReplyResult> => {
   if (!/^[a-f0-9]{24}$/i.test(conversationId)) {
     throw new Error(
@@ -50,7 +65,7 @@ export const generateReply = async (
     );
   }
 
-  const prompt = await resolveActiveReplyPrompt();
+  const prompt = await resolveReplyPrompt(promptName);
   const messages = await fetchConversationMessages(conversationId);
   const formatted = formatConversationForClassifier(messages);
 

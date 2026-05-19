@@ -13,6 +13,7 @@ import {
 import { inferStructured } from "../agents/conversation-analyzer/inference";
 import {
   getActivePrompt,
+  getPrompt,
   CODE_DEFAULT_PROMPT_BODY,
   CODE_DEFAULT_PROMPT_NAME,
 } from "./db";
@@ -39,8 +40,18 @@ export const resolveActivePrompt = async (): Promise<{
   body: string;
   source: "db" | "code-default";
 }> => {
-  const active = await getActivePrompt();
-  if (active) return { name: active.name, body: active.body, source: "db" };
+  // Source unique : prompt actif en DB pour le tool MCP ET l'app d'éval.
+  // Fallback sur le prompt d'origine (code) si aucun prompt actif OU si la
+  // DB est injoignable (dégradation gracieuse — le tool MCP reste debout).
+  try {
+    const active = await getActivePrompt();
+    if (active) return { name: active.name, body: active.body, source: "db" };
+  } catch (e) {
+    console.error(
+      "[analyzer] getActivePrompt KO → fallback prompt code:",
+      e instanceof Error ? e.message : e,
+    );
+  }
   return {
     name: CODE_DEFAULT_PROMPT_NAME,
     body: CODE_DEFAULT_PROMPT_BODY,
@@ -48,8 +59,24 @@ export const resolveActivePrompt = async (): Promise<{
   };
 };
 
+// Run ad-hoc : si `promptName` est fourni on utilise CE prompt précis
+// (brouillon inclus → permet de tester avant de valider) ; sinon le prompt
+// live (dernier validé) avec fallback code. Le tool MCP n'envoie jamais de
+// promptName → toujours le validé/prod.
+const resolvePrompt = async (
+  promptName?: string,
+): Promise<{ name: string; body: string }> => {
+  if (promptName) {
+    const p = await getPrompt(promptName, "analysis");
+    if (!p) throw new Error(`prompt analyse "${promptName}" introuvable`);
+    return { name: p.name, body: p.body };
+  }
+  return resolveActivePrompt();
+};
+
 export const analyzeConversationWithDbPrompt = async (
   conversationId: string,
+  promptName?: string,
 ): Promise<AnalyzeResult> => {
   if (!/^[a-f0-9]{24}$/i.test(conversationId)) {
     throw new Error(
@@ -57,7 +84,7 @@ export const analyzeConversationWithDbPrompt = async (
     );
   }
 
-  const prompt = await resolveActivePrompt();
+  const prompt = await resolvePrompt(promptName);
   const messages = await fetchConversationMessages(conversationId);
   const formatted = formatConversationForClassifier(messages);
 
