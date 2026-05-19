@@ -59,6 +59,11 @@ export const ensureSchema = async (): Promise<void> => {
       conversation_id TEXT PRIMARY KEY,
       transcript      JSONB NOT NULL,
       is_favorite     BOOLEAN NOT NULL DEFAULT false,
+      msg_count       INT,
+      first_at        TIMESTAMPTZ,
+      last_at         TIMESTAMPTZ,
+      last_role       TEXT,
+      channels        TEXT[],
       created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -138,6 +143,22 @@ export const ensureSchema = async (): Promise<void> => {
   await p.query(`
     ALTER TABLE analyses
       ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+  `);
+
+  // Métas conversation dénormalisées (cache du transcript), peuplées à
+  // l'upsert. Idempotent, non destructif ; lignes legacy = NULL (affichées
+  // « — » et exclues des filtres, self-healing à la prochaine ré-analyse).
+  await p.query(`
+    ALTER TABLE conversations
+      ADD COLUMN IF NOT EXISTS msg_count INT,
+      ADD COLUMN IF NOT EXISTS first_at  TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS last_at   TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS last_role TEXT,
+      ADD COLUMN IF NOT EXISTS channels  TEXT[];
+    CREATE INDEX IF NOT EXISTS conversations_last_at
+      ON conversations (last_at DESC NULLS LAST);
+    CREATE INDEX IF NOT EXISTS conversations_msg_count
+      ON conversations (msg_count);
   `);
 
   // Seed par famille : défaut analysis (classifier) + défaut reply (playbook
@@ -353,16 +374,68 @@ export const setLivePrompt = async (
 };
 
 // ---------- conversations + analyses ----------
+
+interface ConvMeta {
+  msgCount: number;
+  firstAt: Date | null;
+  lastAt: Date | null;
+  lastRole: string | null;
+  channels: string[];
+}
+
+// Métas dérivées du transcript, mises en cache en colonnes à l'upsert (un
+// re-fetch les rafraîchit). Tolérant : n'exploite que les éléments objet
+// avec `at` epoch ms > 0 ; un transcript legacy (string[]) donne
+// msg_count seul, le reste NULL.
+const deriveConvMeta = (transcript: TranscriptItem[]): ConvMeta => {
+  const msgs = transcript.filter(
+    (m): m is ConvMsg =>
+      typeof m === "object" && m !== null && typeof m.at === "number",
+  );
+  let firstAt: number | null = null;
+  let last: ConvMsg | null = null;
+  for (const m of msgs) {
+    if (m.at <= 0) continue;
+    if (firstAt === null || m.at < firstAt) firstAt = m.at;
+    if (last === null || m.at >= last.at) last = m;
+  }
+  const channels = [...new Set(msgs.map((m) => m.channel))];
+  return {
+    msgCount: transcript.length,
+    firstAt: firstAt === null ? null : new Date(firstAt),
+    lastAt: last ? new Date(last.at) : null,
+    lastRole: last ? last.role : null,
+    channels,
+  };
+};
+
 export const upsertConversation = async (
   conversationId: string,
   transcript: ConvMsg[],
 ): Promise<void> => {
+  const meta = deriveConvMeta(transcript);
   await getPool().query(
-    `INSERT INTO conversations (conversation_id, transcript)
-     VALUES ($1, $2::jsonb)
+    `INSERT INTO conversations
+       (conversation_id, transcript, msg_count, first_at, last_at,
+        last_role, channels)
+     VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7)
      ON CONFLICT (conversation_id)
-     DO UPDATE SET transcript = EXCLUDED.transcript, updated_at = now()`,
-    [conversationId, JSON.stringify(transcript)],
+     DO UPDATE SET transcript = EXCLUDED.transcript,
+                   msg_count  = EXCLUDED.msg_count,
+                   first_at   = EXCLUDED.first_at,
+                   last_at    = EXCLUDED.last_at,
+                   last_role  = EXCLUDED.last_role,
+                   channels   = EXCLUDED.channels,
+                   updated_at = now()`,
+    [
+      conversationId,
+      JSON.stringify(transcript),
+      meta.msgCount,
+      meta.firstAt,
+      meta.lastAt,
+      meta.lastRole,
+      meta.channels,
+    ],
   );
 };
 
@@ -391,39 +464,123 @@ export interface ConvListRow {
   analyses_count: number;
   has_canon: boolean;
   latest_at: string | null;
+  msg_count: number | null;
+  first_at: string | null;
+  last_at: string | null;
+  last_role: string | null;
+  channels: string[] | null;
 }
 
+export interface ConvListMetrics {
+  count: number;
+  favorites: number;
+  with_canon: number;
+  avg_messages: number | null;
+  period_from: string | null;
+  period_to: string | null;
+}
+
+export interface ConvListFilters {
+  page: number;
+  pageSize: number;
+  favoriteOnly: boolean;
+  hasCanon?: boolean;
+  minMessages?: number;
+  lastRole?: string;
+  channel?: string;
+  sort?: string;
+  dir?: "asc" | "desc";
+}
+
+const CONV_SORT_COLS: Record<string, string> = {
+  last_at: "c.last_at",
+  first_at: "c.first_at",
+  msg_count: "c.msg_count",
+  latest_at: "a.latest_at",
+};
+
 export const listConversations = async (
-  page: number,
-  pageSize: number,
-  favoriteOnly: boolean,
-): Promise<{ rows: ConvListRow[]; total: number }> => {
-  const offset = (page - 1) * pageSize;
-  const where = favoriteOnly ? "WHERE c.is_favorite" : "";
+  f: ConvListFilters,
+): Promise<{
+  rows: ConvListRow[];
+  total: number;
+  metrics: ConvListMetrics;
+}> => {
+  const offset = (f.page - 1) * f.pageSize;
+  const cond: string[] = [];
+  const args: unknown[] = [];
+  if (f.favoriteOnly) cond.push("c.is_favorite");
+  if (f.hasCanon !== undefined)
+    cond.push(`COALESCE(a.canon, false) = $${args.push(f.hasCanon)}`);
+  if (f.minMessages !== undefined)
+    cond.push(`c.msg_count >= $${args.push(f.minMessages)}`);
+  if (f.lastRole) cond.push(`c.last_role = $${args.push(f.lastRole)}`);
+  if (f.channel) cond.push(`$${args.push(f.channel)} = ANY(c.channels)`);
+  const where = cond.length ? `WHERE ${cond.join(" AND ")}` : "";
+  // Sous-requête `a` groupée par conv ⇒ au plus 1 ligne/conv, pas de fan-out :
+  // count(*) = nb de conversations, et les metrics portent sur le set filtré
+  // entier (pas la page).
+  const from = `
+    FROM conversations c
+    LEFT JOIN (
+      SELECT conversation_id,
+             count(*) AS cnt,
+             bool_or(is_canon) AS canon,
+             max(created_at) AS latest_at
+      FROM analyses GROUP BY conversation_id
+    ) a ON a.conversation_id = c.conversation_id
+    ${where}`;
   const p = getPool();
-  const totalRes = await p.query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM conversations c ${where}`,
+
+  const mRes = await p.query<{
+    count: string;
+    favorites: string;
+    with_canon: string;
+    avg_messages: string | null;
+    period_from: string | null;
+    period_to: string | null;
+  }>(
+    `SELECT count(*)::text AS count,
+            count(*) FILTER (WHERE c.is_favorite)::text AS favorites,
+            count(*) FILTER (WHERE COALESCE(a.canon, false))::text AS with_canon,
+            avg(c.msg_count)::numeric(10,1)::text AS avg_messages,
+            min(c.first_at)::text AS period_from,
+            max(c.last_at)::text  AS period_to
+     ${from}`,
+    args,
   );
+  const m = mRes.rows[0];
+
+  const sortCol = CONV_SORT_COLS[f.sort ?? "last_at"] ?? "c.last_at";
+  const dir = f.dir === "asc" ? "ASC" : "DESC";
   const { rows } = await p.query<ConvListRow>(
     `SELECT c.conversation_id,
             c.is_favorite,
-            COALESCE(a.cnt, 0)::int   AS analyses_count,
-            COALESCE(a.canon, false)  AS has_canon,
-            a.latest_at
-     FROM conversations c
-     LEFT JOIN (
-       SELECT conversation_id,
-              count(*) AS cnt,
-              bool_or(is_canon) AS canon,
-              max(created_at) AS latest_at
-       FROM analyses GROUP BY conversation_id
-     ) a ON a.conversation_id = c.conversation_id
-     ${where}
-     ORDER BY a.latest_at DESC NULLS LAST, c.updated_at DESC
-     LIMIT $1 OFFSET $2`,
-    [pageSize, offset],
+            COALESCE(a.cnt, 0)::int  AS analyses_count,
+            COALESCE(a.canon, false) AS has_canon,
+            a.latest_at::text        AS latest_at,
+            c.msg_count,
+            c.first_at::text         AS first_at,
+            c.last_at::text          AS last_at,
+            c.last_role,
+            c.channels
+     ${from}
+     ORDER BY ${sortCol} ${dir} NULLS LAST, c.updated_at DESC
+     LIMIT $${args.push(f.pageSize)} OFFSET $${args.push(offset)}`,
+    args,
   );
-  return { rows, total: parseInt(totalRes.rows[0].n, 10) };
+  return {
+    rows,
+    total: parseInt(m.count, 10),
+    metrics: {
+      count: parseInt(m.count, 10),
+      favorites: parseInt(m.favorites, 10),
+      with_canon: parseInt(m.with_canon, 10),
+      avg_messages: m.avg_messages === null ? null : parseFloat(m.avg_messages),
+      period_from: m.period_from,
+      period_to: m.period_to,
+    },
+  };
 };
 
 export interface AnalysisRow {

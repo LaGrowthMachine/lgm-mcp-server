@@ -144,13 +144,46 @@ evalRouter.get(
 evalRouter.get(
   "/conversations",
   wrap(async (req, res) => {
-    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+    const q = req.query;
+    const page = Math.max(1, parseInt(String(q.page ?? "1"), 10) || 1);
     const pageSize = Math.min(
       100,
-      Math.max(1, parseInt(String(req.query.pageSize ?? "20"), 10) || 20),
+      Math.max(1, parseInt(String(q.pageSize ?? "20"), 10) || 20),
     );
-    const favoriteOnly = String(req.query.favorite ?? "") === "1";
-    res.json(await db.listConversations(page, pageSize, favoriteOnly));
+    const favoriteOnly = String(q.favorite ?? "") === "1";
+    const hasCanon =
+      q.hasCanon === "1" ? true : q.hasCanon === "0" ? false : undefined;
+    const minRaw = parseInt(String(q.minMessages ?? ""), 10);
+    const minMessages =
+      Number.isFinite(minRaw) && minRaw > 0 ? minRaw : undefined;
+    const lastRole =
+      q.lastRole === "LEAD" || q.lastRole === "SENDER"
+        ? q.lastRole
+        : undefined;
+    const channel =
+      typeof q.channel === "string" && q.channel
+        ? q.channel.toUpperCase()
+        : undefined;
+    const sort = ["last_at", "first_at", "msg_count", "latest_at"].includes(
+      String(q.sort),
+    )
+      ? String(q.sort)
+      : undefined;
+    const dir =
+      q.dir === "asc" ? "asc" : q.dir === "desc" ? "desc" : undefined;
+    res.json(
+      await db.listConversations({
+        page,
+        pageSize,
+        favoriteOnly,
+        hasCanon,
+        minMessages,
+        lastRole,
+        channel,
+        sort,
+        dir,
+      }),
+    );
   }),
 );
 

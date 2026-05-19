@@ -41,6 +41,26 @@ export interface ConvListRow {
   analyses_count: number;
   has_canon: boolean;
   latest_at: string | null;
+  msg_count: number | null;
+  first_at: string | null;
+  last_at: string | null;
+  last_role: string | null;
+  channels: string[] | null;
+}
+
+export interface ConvListMetrics {
+  count: number;
+  favorites: number;
+  with_canon: number;
+  avg_messages: number | null;
+  period_from: string | null;
+  period_to: string | null;
+}
+
+export interface ConvListResp {
+  rows: ConvListRow[];
+  total: number;
+  metrics: ConvListMetrics;
 }
 
 export interface AnalysisRow {
