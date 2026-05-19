@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback } from "react";
 import {
   Typography,
   Table,
-  Tag,
   Button,
   Space,
   Switch,
@@ -113,13 +112,6 @@ export function Conversations() {
             title: "analyses",
             dataIndex: "analyses_count",
             width: 100,
-          },
-          {
-            title: "canon",
-            dataIndex: "has_canon",
-            width: 90,
-            render: (v: boolean) =>
-              v ? <Tag color="green">oui</Tag> : <Tag>non</Tag>,
           },
           {
             title: "dernière analyse",
