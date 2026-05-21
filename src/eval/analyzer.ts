@@ -10,7 +10,10 @@ import {
   CLASSIFIER_TOOL_DESCRIPTION,
   CLASSIFIER_TOOL_SCHEMA,
 } from "../agents/conversation-analyzer/conversationClassifier";
-import { inferStructured } from "../agents/conversation-analyzer/inference";
+import {
+  inferStructured,
+  type InferenceUsage,
+} from "../agents/conversation-analyzer/inference";
 import {
   getActivePrompt,
   getPrompt,
@@ -26,6 +29,10 @@ import {
 export type AnalyzeResult = {
   conversation: ConvMsg[];
   promptName: string;
+  // `usage` n'existe que quand on a effectivement appelé l'inférence (status
+  // "ok"). Pour un "skipped" (pas de message du lead, etc.) on n'a pas payé
+  // de tokens → undefined ; les colonnes resteront NULL en DB.
+  usage?: InferenceUsage;
   analysis:
     | { status: "skipped"; reason: string; messageCount: number }
     | {
@@ -118,7 +125,9 @@ export const analyzeConversationWithDbPrompt = async (
     formatted.messages,
   )}\n</CONVERSATION_${delimiter}>`;
 
-  const classification = await inferStructured<Record<string, unknown>>({
+  const { data: classification, usage } = await inferStructured<
+    Record<string, unknown>
+  >({
     model,
     systemPrompt,
     userMessage,
@@ -130,6 +139,7 @@ export const analyzeConversationWithDbPrompt = async (
   return {
     conversation: formatted.messages,
     promptName: prompt.name,
+    usage,
     analysis: {
       status: "ok",
       promptVersion: prompt.name,

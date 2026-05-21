@@ -4,6 +4,7 @@ import {
   Card,
   Form,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Space,
@@ -27,7 +28,19 @@ import { http, Model, DefaultModelResp } from "../api";
 interface ModelFormValues {
   label: string;
   modelId: string;
+  // null = champ vidé volontairement (efface le prix en DB).
+  priceInputPerMtok: number | null | undefined;
+  priceOutputPerMtok: number | null | undefined;
 }
+
+// Prix tableau : NULL ⇒ "—", sinon "$X" / Mtok avec 2-3 décimales selon la
+// magnitude. On reste en USD par Mtok = unité native des grilles Bedrock.
+const fmtPriceMtok = (n: number | null): string => {
+  if (n === null || n === undefined) return "—";
+  if (n === 0) return "$0";
+  if (n < 0.1) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(2)}`;
+};
 
 export function Models() {
   const [models, setModels] = useState<Model[]>([]);
@@ -69,22 +82,37 @@ export function Models() {
 
   const openEdit = (m: Model) => {
     setEditing(m);
-    form.setFieldsValue({ label: m.label, modelId: m.aws_model_id });
+    form.setFieldsValue({
+      label: m.label,
+      modelId: m.aws_model_id,
+      priceInputPerMtok: m.price_input_per_mtok ?? undefined,
+      priceOutputPerMtok: m.price_output_per_mtok ?? undefined,
+    });
     setModalOpen(true);
   };
 
   const onSubmit = async () => {
     try {
       const values = await form.validateFields();
+      // InputNumber renvoie `null` quand l'utilisateur efface la valeur — on
+      // veut alors null en DB (pas undefined) pour effacer le prix.
+      const priceIn = values.priceInputPerMtok ?? null;
+      const priceOut = values.priceOutputPerMtok ?? null;
       if (editing) {
-        // Seul `label` est éditable. model_id immutable — créer une nouvelle
-        // row pour changer le modèle technique.
-        await http.put(`/models/${editing.id}`, { label: values.label });
+        // `label` + prix sont éditables. model_id immutable — créer une
+        // nouvelle row pour changer le modèle technique.
+        await http.put(`/models/${editing.id}`, {
+          label: values.label,
+          priceInputPerMtok: priceIn,
+          priceOutputPerMtok: priceOut,
+        });
         message.success("Modèle mis à jour");
       } else {
         await http.post("/models", {
           label: values.label,
           modelId: values.modelId,
+          priceInputPerMtok: priceIn,
+          priceOutputPerMtok: priceOut,
         });
         message.success("Modèle créé");
       }
@@ -155,6 +183,28 @@ export function Models() {
               ),
             },
             { title: "Model ID (AWS)", dataIndex: "aws_model_id" },
+            {
+              title: "Prix in (USD / Mtok)",
+              dataIndex: "price_input_per_mtok",
+              width: 150,
+              align: "right",
+              render: (v: number | null) => (
+                <span style={{ color: v === null ? "#999" : undefined }}>
+                  {fmtPriceMtok(v)}
+                </span>
+              ),
+            },
+            {
+              title: "Prix out (USD / Mtok)",
+              dataIndex: "price_output_per_mtok",
+              width: 150,
+              align: "right",
+              render: (v: number | null) => (
+                <span style={{ color: v === null ? "#999" : undefined }}>
+                  {fmtPriceMtok(v)}
+                </span>
+              ),
+            },
             {
               title: "Actions",
               key: "actions",
@@ -227,6 +277,35 @@ export function Models() {
               placeholder="eu.anthropic.claude-sonnet-4-6"
             />
           </Form.Item>
+          {/* Prix optionnels : laisser vide ⇒ coût non calculé pour ce modèle
+              (les tokens restent persistés et affichés). Unité = USD par
+              million de tokens, comme les grilles tarifaires Bedrock. */}
+          <Space size="middle" style={{ display: "flex" }}>
+            <Form.Item
+              name="priceInputPerMtok"
+              label="Prix input (USD / Mtok)"
+              style={{ flex: 1 }}
+            >
+              <InputNumber
+                min={0}
+                step={0.01}
+                placeholder="ex : 3.00"
+                style={{ width: "100%" }}
+              />
+            </Form.Item>
+            <Form.Item
+              name="priceOutputPerMtok"
+              label="Prix output (USD / Mtok)"
+              style={{ flex: 1 }}
+            >
+              <InputNumber
+                min={0}
+                step={0.01}
+                placeholder="ex : 15.00"
+                style={{ width: "100%" }}
+              />
+            </Form.Item>
+          </Space>
         </Form>
       </Modal>
     </Space>

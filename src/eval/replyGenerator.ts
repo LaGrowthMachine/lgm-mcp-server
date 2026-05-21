@@ -5,7 +5,10 @@ import {
   renderConversationForInference,
   ConvMsg,
 } from "../agents/conversation-analyzer/conversationFormatter";
-import { inferText } from "../agents/conversation-analyzer/inference";
+import {
+  inferText,
+  type InferenceUsage,
+} from "../agents/conversation-analyzer/inference";
 import { getActivePrompt, getPrompt } from "./db";
 import {
   CODE_DEFAULT_REPLY_PROMPT_BODY,
@@ -24,6 +27,7 @@ import {
 export type GenerateReplyResult = {
   conversation: ConvMsg[];
   promptName: string;
+  usage?: InferenceUsage;
   result:
     | { status: "skipped"; reason: string; messageCount: number }
     | { status: "ok"; replyText: string; context: ReplyContext };
@@ -104,11 +108,16 @@ export const generateReply = async (
     `</CONVERSATION_${delimiter}>`,
   ].join("\n\n");
 
-  const replyText = await inferText({ model, systemPrompt, userMessage });
+  const { text: replyText, usage } = await inferText({
+    model,
+    systemPrompt,
+    userMessage,
+  });
 
   return {
     conversation: formatted.messages,
     promptName: prompt.name,
+    usage,
     result: { status: "ok", replyText, context },
   };
 };

@@ -3,12 +3,32 @@ import {
   isTextBlock,
   isToolUseBlock,
   type ConverseRequest,
+  type ConverseUsage,
 } from "../../inference/client";
 
 // Helpers d'inférence partagés par le harness d'éval (analyzer + reply
 // generator). On parle à Bedrock via la Converse API uniforme — cf. client.ts.
 // Le contrat exposé reste indépendant du provider : `inferStructured` force
 // un tool_use et retourne son input, `inferText` retourne un texte libre.
+//
+// Les deux helpers exposent `usage` (tokens input/output + cache reads) pour
+// que les appelants puissent les persister par analyse → agrégation au niveau
+// batch + calcul du coût (prix par modèle, table `models`, USD/Mtok).
+
+// Compteurs de tokens exposés aux appelants. Re-typé localement pour figer
+// le contrat externe et éviter qu'un changement du sous-ensemble Converse
+// utilisé ne casse les appelants en cascade.
+export interface InferenceUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens?: number;
+}
+
+const toInferenceUsage = (u: ConverseUsage): InferenceUsage => ({
+  inputTokens: u.inputTokens,
+  outputTokens: u.outputTokens,
+  cacheReadInputTokens: u.cacheReadInputTokens,
+});
 
 export interface InferStructuredArgs {
   model: string;
@@ -20,9 +40,14 @@ export interface InferStructuredArgs {
   maxTokens?: number;
 }
 
+export interface InferStructuredResult<T> {
+  data: T;
+  usage: InferenceUsage;
+}
+
 export const inferStructured = async <T>(
   args: InferStructuredArgs,
-): Promise<T> => {
+): Promise<InferStructuredResult<T>> => {
   const req: ConverseRequest = {
     modelId: args.model,
     system: [{ text: args.systemPrompt }],
@@ -75,7 +100,10 @@ export const inferStructured = async <T>(
       `[inference] multiple tool_use blocks (${toolUses.length}); using the last one`,
     );
   }
-  return toolUses[toolUses.length - 1].toolUse.input as T;
+  return {
+    data: toolUses[toolUses.length - 1].toolUse.input as T,
+    usage: toInferenceUsage(response.usage),
+  };
 };
 
 export interface InferTextArgs {
@@ -85,11 +113,16 @@ export interface InferTextArgs {
   maxTokens?: number;
 }
 
+export interface InferTextResult {
+  text: string;
+  usage: InferenceUsage;
+}
+
 // Complétion texte libre (pas de tool forcé) — utilisée par le harness
 // d'éval pour la génération de réponse. temperature:0 comme inferStructured :
 // le texte est alors reproductible, ce qui rend la détection de régression
 // vs réponse favoritée (diff texte) significative.
-export const inferText = async (args: InferTextArgs): Promise<string> => {
+export const inferText = async (args: InferTextArgs): Promise<InferTextResult> => {
   let response;
   try {
     response = await callConverse({
@@ -116,5 +149,5 @@ export const inferText = async (args: InferTextArgs): Promise<string> => {
       `Inference returned no text (stopReason=${response.stopReason}).`,
     );
   }
-  return text;
+  return { text, usage: toInferenceUsage(response.usage) };
 };

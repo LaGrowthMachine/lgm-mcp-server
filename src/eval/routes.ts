@@ -141,6 +141,7 @@ evalRouter.post(
       payload,
       batchId,
       modelId: resolved.uuid,
+      usage: result.usage,
     });
 
     // Comparaison déterministe au canon courant (si présent).
@@ -668,6 +669,19 @@ evalRouter.get(
   }),
 );
 
+// Parse prix optionnel : `undefined` = champ non envoyé (no-op côté update) ;
+// `null` = explicitement effacé (NULL en DB) ; nombre ≥ 0 = nouvelle valeur.
+// Tout le reste (string non numérique, négatif, NaN) → 400.
+const parsePriceField = (
+  v: unknown,
+): number | null | undefined | "INVALID" => {
+  if (v === undefined) return undefined;
+  if (v === null || v === "") return null;
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  if (!Number.isFinite(n) || n < 0) return "INVALID";
+  return n;
+};
+
 evalRouter.post(
   "/models",
   wrap(async (req, res) => {
@@ -677,8 +691,21 @@ evalRouter.post(
       res.status(400).json({ error: "label et modelId sont requis" });
       return;
     }
+    const priceIn = parsePriceField(req.body?.priceInputPerMtok);
+    const priceOut = parsePriceField(req.body?.priceOutputPerMtok);
+    if (priceIn === "INVALID" || priceOut === "INVALID") {
+      res
+        .status(400)
+        .json({ error: "prix invalides (USD / Mtok, nombre ≥ 0 ou null)" });
+      return;
+    }
     try {
-      const m = await db.createModel({ label, modelId });
+      const m = await db.createModel({
+        label,
+        modelId,
+        priceInputPerMtok: priceIn,
+        priceOutputPerMtok: priceOut,
+      });
       res.json(m);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -705,8 +732,20 @@ evalRouter.put(
       res.status(400).json({ error: "label ne peut pas être vide" });
       return;
     }
+    const priceIn = parsePriceField(req.body?.priceInputPerMtok);
+    const priceOut = parsePriceField(req.body?.priceOutputPerMtok);
+    if (priceIn === "INVALID" || priceOut === "INVALID") {
+      res
+        .status(400)
+        .json({ error: "prix invalides (USD / Mtok, nombre ≥ 0 ou null)" });
+      return;
+    }
     try {
-      const m = await db.updateModel(id, { label });
+      const m = await db.updateModel(id, {
+        label,
+        priceInputPerMtok: priceIn,
+        priceOutputPerMtok: priceOut,
+      });
       if (!m) {
         res.status(404).json({ error: "modèle inconnu" });
         return;

@@ -146,6 +146,18 @@ export const ensureSchema = async (): Promise<void> => {
       ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
   `);
 
+  // Tokens consommés par appel d'inférence (Converse `usage`). NULL pour les
+  // analyses legacy (avant cette feature) ET pour les analyses 'skipped'
+  // (pas d'inférence appelée). Le coût est dérivé à la lecture via le prix
+  // unitaire du modèle (table `models`) — pas de snapshot pour permettre
+  // d'amender la grille tarifaire rétroactivement.
+  await p.query(`
+    ALTER TABLE analyses
+      ADD COLUMN IF NOT EXISTS input_tokens       INT,
+      ADD COLUMN IF NOT EXISTS output_tokens      INT,
+      ADD COLUMN IF NOT EXISTS cache_read_tokens  INT;
+  `);
+
   // Métas conversation dénormalisées (cache du transcript), peuplées à
   // l'upsert. Idempotent, non destructif ; lignes legacy = NULL (affichées
   // « — » et exclues des filtres, self-healing à la prochaine ré-analyse).
@@ -227,6 +239,14 @@ export const ensureSchema = async (): Promise<void> => {
     -- jamais lue pour l'appel Bedrock (le préfixe d'aws_model_id suffit).
     ALTER TABLE models DROP CONSTRAINT IF EXISTS models_provider_model_id_key;
     ALTER TABLE models DROP COLUMN IF EXISTS provider;
+
+    -- Grille tarifaire : USD par million de tokens (input / output). NULL =
+    -- modèle sans prix configuré → coût affiché "—" mais tokens visibles.
+    -- Pas de snapshot par analyse : on recalcule à la lecture (cf. note plus
+    -- haut sur la colonne tokens des analyses).
+    ALTER TABLE models
+      ADD COLUMN IF NOT EXISTS price_input_per_mtok  NUMERIC(12, 6),
+      ADD COLUMN IF NOT EXISTS price_output_per_mtok NUMERIC(12, 6);
 
     CREATE TABLE IF NOT EXISTS settings (
       key        TEXT PRIMARY KEY,
@@ -559,11 +579,18 @@ export const insertAnalysis = async (args: {
   payload: unknown;
   batchId?: string;
   modelId?: string;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens?: number;
+  };
 }): Promise<{ id: string }> => {
   const { rows } = await getPool().query<{ id: string }>(
     `INSERT INTO analyses
-       (conversation_id, prompt_name, status, payload, batch_id, model_id)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6) RETURNING id::text AS id`,
+       (conversation_id, prompt_name, status, payload, batch_id, model_id,
+        input_tokens, output_tokens, cache_read_tokens)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
+     RETURNING id::text AS id`,
     [
       args.conversationId,
       args.promptName,
@@ -571,6 +598,9 @@ export const insertAnalysis = async (args: {
       JSON.stringify(args.payload),
       args.batchId ?? null,
       args.modelId ?? null,
+      args.usage?.inputTokens ?? null,
+      args.usage?.outputTokens ?? null,
+      args.usage?.cacheReadInputTokens ?? null,
     ],
   );
   return rows[0];
@@ -712,6 +742,12 @@ export interface AnalysisRow {
   model_id: string | null;
   model_label: string | null;
   model_aws_id: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  // Coût USD = (input_tokens × price_input + output_tokens × price_output) / 1e6
+  // Calculé à la lecture (LEFT JOIN models). NULL si modèle sans prix.
+  cost_usd: number | null;
 }
 
 export const getConversationDetail = async (
@@ -734,7 +770,19 @@ export const getConversationDetail = async (
             a.created_at, a.payload,
             a.model_id::text AS model_id,
             m.label AS model_label,
-            m.aws_model_id AS model_aws_id
+            m.aws_model_id AS model_aws_id,
+            a.input_tokens, a.output_tokens, a.cache_read_tokens,
+            CASE
+              WHEN a.input_tokens IS NULL
+               AND a.output_tokens IS NULL THEN NULL
+              WHEN m.price_input_per_mtok IS NULL
+               AND m.price_output_per_mtok IS NULL THEN NULL
+              ELSE
+                COALESCE(a.input_tokens,  0)::numeric / 1e6
+                  * COALESCE(m.price_input_per_mtok,  0)
+              + COALESCE(a.output_tokens, 0)::numeric / 1e6
+                  * COALESCE(m.price_output_per_mtok, 0)
+            END::float8 AS cost_usd
      FROM analyses a
      LEFT JOIN models m ON m.id = a.model_id
      WHERE a.conversation_id = $1
@@ -1026,6 +1074,10 @@ export interface BatchListItem {
   n_skipped: number;
   n_error: number;
   model_label: string | null;
+  n_input_tokens: number | null;
+  n_output_tokens: number | null;
+  n_cache_read_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export interface BatchAnalysisItem {
@@ -1041,6 +1093,10 @@ export interface BatchAnalysisItem {
   canon_sub_label: string | null;
   reason: string | null;
   verdict: BatchVerdict;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export interface LabelBreakdownRow {
@@ -1063,16 +1119,29 @@ export interface BatchMetrics {
   pass_rate: number | null;
   by_label: LabelBreakdownRow[];
   by_sub_label: LabelBreakdownRow[];
+  // Agrégats coût/tokens — NULL si aucune analyse n'a remonté de tokens
+  // (legacy + skipped only). Le coût est NULL si tous les rows pertinents
+  // ont un modèle sans prix.
+  n_input_tokens: number | null;
+  n_output_tokens: number | null;
+  n_cache_read_tokens: number | null;
+  cost_usd: number | null;
 }
 
 // Jointure verdict — réutilisée par `listBatches` (agrégé) et
 // `getBatchAnalyses` (détail). Compare la classification de chaque analyse
 // du batch au canon courant de la conv (au plus 1 ligne par conv via
 // l'index `analyses_one_canon`). Verdict cohérent et déterministe.
+//
+// Les tokens (input/output/cache_read) sont remontés ici et le coût USD est
+// calculé via LEFT JOIN models (prix par Mtok). Coût NULL si modèle sans
+// prix ; tokens NULL pour les analyses legacy + skipped.
 const BATCH_JOIN_CTE = `
   batch_an AS (
     SELECT a.id::text AS analysis_id, a.batch_id, a.conversation_id,
            a.status, a.is_canon, a.created_at,
+           a.input_tokens, a.output_tokens, a.cache_read_tokens,
+           a.model_id,
            a.payload->'analysis'->'classification'->>'suggested_label'
              AS new_label,
            a.payload->'analysis'->'classification'->>'suggested_sub_label'
@@ -1100,8 +1169,26 @@ const BATCH_JOIN_CTE = `
               AND b.new_sub_label IS NOT DISTINCT FROM c.canon_sub_label
                 THEN 'pass'
              ELSE 'regression'
-           END AS verdict
-    FROM batch_an b LEFT JOIN canon_an c USING (conversation_id)
+           END AS verdict,
+           CASE
+             -- Pas de tokens persistés (legacy ou status='skipped') → cost
+             -- NULL, sinon on remonterait 0 sur des analyses où on n'a
+             -- jamais facturé.
+             WHEN b.input_tokens IS NULL
+              AND b.output_tokens IS NULL THEN NULL
+             -- Modèle sans grille tarifaire → cost NULL (tokens visibles
+             -- séparément).
+             WHEN m.price_input_per_mtok  IS NULL
+              AND m.price_output_per_mtok IS NULL THEN NULL
+             ELSE
+               COALESCE(b.input_tokens,  0)::numeric / 1e6
+                 * COALESCE(m.price_input_per_mtok,  0)
+             + COALESCE(b.output_tokens, 0)::numeric / 1e6
+                 * COALESCE(m.price_output_per_mtok, 0)
+           END::float8 AS cost_usd
+    FROM batch_an b
+    LEFT JOIN canon_an c USING (conversation_id)
+    LEFT JOIN models m  ON m.id = b.model_id
   )
 `;
 
@@ -1183,7 +1270,14 @@ export const listBatches = async (
               count(*) FILTER (WHERE verdict='regression')::int   AS n_regression,
               count(*) FILTER (WHERE verdict='no_canon')::int     AS n_no_canon,
               count(*) FILTER (WHERE verdict='skipped')::int      AS n_skipped,
-              count(*) FILTER (WHERE verdict='error')::int        AS n_error
+              count(*) FILTER (WHERE verdict='error')::int        AS n_error,
+              -- bigint→int : SUM(int) renvoie bigint, qui sort en string
+              -- côté node-postgres (perte de typing JS). int est suffisant
+              -- (max ~2.1B ; un batch réaliste = 100k conv × 2k tok = 2e8).
+              SUM(input_tokens)::int      AS n_input_tokens,
+              SUM(output_tokens)::int     AS n_output_tokens,
+              SUM(cache_read_tokens)::int AS n_cache_read_tokens,
+              SUM(cost_usd)::float8       AS cost_usd
        FROM joined GROUP BY batch_id
      )
      SELECT b.id,
@@ -1196,6 +1290,10 @@ export const listBatches = async (
             COALESCE(a.n_no_canon, 0)   AS n_no_canon,
             COALESCE(a.n_skipped, 0)    AS n_skipped,
             COALESCE(a.n_error, 0)      AS n_error,
+            a.n_input_tokens,
+            a.n_output_tokens,
+            a.n_cache_read_tokens,
+            a.cost_usd,
             m.label                     AS model_label
        FROM batches b
        LEFT JOIN agg a ON a.batch_id = b.id
@@ -1215,7 +1313,8 @@ export const getBatchAnalyses = async (
      SELECT analysis_id, conversation_id, status, is_canon,
             created_at::text AS created_at,
             has_canon, new_label, new_sub_label,
-            canon_label, canon_sub_label, reason, verdict
+            canon_label, canon_sub_label, reason, verdict,
+            input_tokens, output_tokens, cache_read_tokens, cost_usd
        FROM joined
       WHERE batch_id = $1
       ORDER BY created_at ASC`,
@@ -1237,6 +1336,20 @@ export const computeBatchMetricsFromRows = (
   let n_skipped = 0;
   let n_error = 0;
   let n_with_canon = 0;
+  // NULL agrégés : on garde null tant qu'aucun row n'a remonté de tokens /
+  // coût (= legacy ou batch tout-skipped). Premier row non-null bascule
+  // l'accumulateur en number, et on additionne les autres en COALESCE(0).
+  let n_input_tokens: number | null = null;
+  let n_output_tokens: number | null = null;
+  let n_cache_read_tokens: number | null = null;
+  let cost_usd: number | null = null;
+  const addNullable = (
+    acc: number | null,
+    v: number | null | undefined,
+  ): number | null => {
+    if (v == null) return acc;
+    return (acc ?? 0) + v;
+  };
   for (const r of rows) {
     if (r.has_canon) n_with_canon++;
     if (r.verdict === "pass") n_pass++;
@@ -1244,6 +1357,10 @@ export const computeBatchMetricsFromRows = (
     else if (r.verdict === "no_canon") n_no_canon++;
     else if (r.verdict === "skipped") n_skipped++;
     else if (r.verdict === "error") n_error++;
+    n_input_tokens = addNullable(n_input_tokens, r.input_tokens);
+    n_output_tokens = addNullable(n_output_tokens, r.output_tokens);
+    n_cache_read_tokens = addNullable(n_cache_read_tokens, r.cache_read_tokens);
+    cost_usd = addNullable(cost_usd, r.cost_usd);
   }
   const pass_rate =
     n_pass + n_regression > 0 ? n_pass / (n_pass + n_regression) : null;
@@ -1323,6 +1440,10 @@ export const computeBatchMetricsFromRows = (
     pass_rate,
     by_label,
     by_sub_label,
+    n_input_tokens,
+    n_output_tokens,
+    n_cache_read_tokens,
+    cost_usd,
   };
 };
 
@@ -1337,10 +1458,18 @@ export interface Model {
   is_archived: boolean;
   created_at: string;
   updated_at: string;
+  // Prix unitaire USD / million de tokens. NULL ⇒ coût non calculable
+  // (les tokens restent visibles, le coût affiche "—").
+  price_input_per_mtok: number | null;
+  price_output_per_mtok: number | null;
 }
 
+// pg renvoie NUMERIC en string par défaut (perte de précision sinon). On
+// caste explicitement en float côté SELECT → typage Model côté serveur OK.
 const selectModelCols = `id::text AS id, label, aws_model_id,
-  is_archived, created_at::text AS created_at, updated_at::text AS updated_at`;
+  is_archived, created_at::text AS created_at, updated_at::text AS updated_at,
+  price_input_per_mtok::float8  AS price_input_per_mtok,
+  price_output_per_mtok::float8 AS price_output_per_mtok`;
 
 export const listModels = async (
   includeArchived = false,
@@ -1364,26 +1493,47 @@ export const getModel = async (id: string): Promise<Model | null> => {
 export const createModel = async (args: {
   label: string;
   modelId: string;
+  priceInputPerMtok?: number | null;
+  priceOutputPerMtok?: number | null;
 }): Promise<Model> => {
   const id = randomUUID();
   const { rows } = await getPool().query<Model>(
-    `INSERT INTO models (id, label, aws_model_id)
-     VALUES ($1, $2, $3)
+    `INSERT INTO models (id, label, aws_model_id,
+                         price_input_per_mtok, price_output_per_mtok)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING ${selectModelCols}`,
-    [id, args.label, args.modelId],
+    [
+      id,
+      args.label,
+      args.modelId,
+      args.priceInputPerMtok ?? null,
+      args.priceOutputPerMtok ?? null,
+    ],
   );
   return rows[0];
 };
 
 export const updateModel = async (
   id: string,
-  args: { label?: string },
+  args: {
+    label?: string;
+    priceInputPerMtok?: number | null;
+    priceOutputPerMtok?: number | null;
+  },
 ): Promise<Model | null> => {
   const fields: string[] = [];
   const values: unknown[] = [];
   if (args.label !== undefined) {
     values.push(args.label);
     fields.push(`label = $${values.length}`);
+  }
+  if (args.priceInputPerMtok !== undefined) {
+    values.push(args.priceInputPerMtok);
+    fields.push(`price_input_per_mtok = $${values.length}`);
+  }
+  if (args.priceOutputPerMtok !== undefined) {
+    values.push(args.priceOutputPerMtok);
+    fields.push(`price_output_per_mtok = $${values.length}`);
   }
   if (fields.length === 0) return getModel(id);
   fields.push(`updated_at = now()`);

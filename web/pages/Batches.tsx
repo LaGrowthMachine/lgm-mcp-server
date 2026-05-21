@@ -30,6 +30,21 @@ const fmtDateTime = (iso: string): string =>
 const fmtPct = (n: number | null): string =>
   n === null ? "—" : `${Math.round(n * 100)} %`;
 
+const fmtCost = (n: number | null): string => {
+  if (n === null || n === undefined) return "—";
+  if (n === 0) return "$0";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  if (n < 1) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(2)}`;
+};
+
+const fmtTokensCompact = (n: number | null): string => {
+  if (n === null || n === undefined) return "—";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+  return String(n);
+};
+
 const statusTag = (s: BatchListItem["status"]) =>
   s === "running" ? (
     <Tag color="processing">en cours</Tag>
@@ -225,6 +240,27 @@ export function Batches() {
             dataIndex: "n_error",
             width: 90,
             render: (n: number) => (n > 0 ? <Tag color="red">{n}</Tag> : "—"),
+          },
+          {
+            // Cellule compacte : coût en gras + total tokens en gris dessous.
+            // NULL ⇒ "—" sur 1 ligne pour les batchs legacy ou sans tokens.
+            title: "coût",
+            width: 110,
+            align: "right",
+            render: (_: unknown, r: BatchListItem) => {
+              const tot =
+                r.n_input_tokens === null && r.n_output_tokens === null
+                  ? null
+                  : (r.n_input_tokens ?? 0) + (r.n_output_tokens ?? 0);
+              return (
+                <div style={{ lineHeight: 1.15 }}>
+                  <div style={{ fontWeight: 600 }}>{fmtCost(r.cost_usd)}</div>
+                  <div style={{ fontSize: 11, color: "#999" }}>
+                    {fmtTokensCompact(tot)} tok
+                  </div>
+                </div>
+              );
+            },
           },
           {
             title: "statut",

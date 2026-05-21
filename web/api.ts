@@ -77,6 +77,10 @@ export interface AnalysisRow {
   model_id: string | null;
   model_label: string | null;
   model_aws_id: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export interface ReplyRowApi {
@@ -172,6 +176,10 @@ export interface BatchListItem {
   n_skipped: number;
   n_error: number;
   model_label: string | null;
+  n_input_tokens: number | null;
+  n_output_tokens: number | null;
+  n_cache_read_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export interface BatchAnalysisItem {
@@ -187,6 +195,10 @@ export interface BatchAnalysisItem {
   canon_sub_label: string | null;
   reason: string | null;
   verdict: BatchVerdict;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export interface LabelBreakdownRow {
@@ -209,6 +221,10 @@ export interface BatchMetrics {
   pass_rate: number | null;
   by_label: LabelBreakdownRow[];
   by_sub_label: LabelBreakdownRow[];
+  n_input_tokens: number | null;
+  n_output_tokens: number | null;
+  n_cache_read_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export interface BatchListResp {
@@ -230,6 +246,9 @@ export interface Model {
   is_archived: boolean;
   created_at: string;
   updated_at: string;
+  // Prix unitaire USD / million de tokens. NULL ⇒ modèle sans prix configuré.
+  price_input_per_mtok: number | null;
+  price_output_per_mtok: number | null;
 }
 
 export interface DefaultModelResp {

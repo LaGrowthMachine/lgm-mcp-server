@@ -553,42 +553,83 @@ export function ConversationDetail() {
                   borderColor: a.is_canon ? "#1f9d57" : undefined,
                 }}
                 title={
-                  <Space wrap size={4}>
-                    {a.is_canon && <Tag color="green">CANON</Tag>}
-                    {a.status !== "ok" && (
-                      <Tag color="default">{a.status}</Tag>
-                    )}
-                    <span>prompt {a.prompt_name ?? "—"}</span>
-                    <span style={{ color: "#888" }}>
-                      modèle {a.model_label ?? "—"}
-                    </span>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12 }}
+                  // 2 niveaux d'info : top = identité (prompt + statuts +
+                  // verdict diff), bottom = méta secondaires (modèle, date,
+                  // tokens/coût). Évite le mélange tag/texte/poids du header
+                  // à plat qui partait en sucette.
+                  <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                    <Space wrap size={6}>
+                      <strong>prompt {a.prompt_name ?? "—"}</strong>
+                      {a.is_canon && <Tag color="green">CANON</Tag>}
+                      {a.status !== "ok" && (
+                        <Tag color="default">{a.status}</Tag>
+                      )}
+                      {a.edited_at && (
+                        <Tag color="purple" style={{ fontSize: 11 }}>
+                          ÉDITÉ
+                        </Tag>
+                      )}
+                      {analysisView === "diff" &&
+                        (baseDiff == null ? (
+                          <Tag color="default" style={{ fontSize: 11 }}>
+                            {refLabel}
+                          </Tag>
+                        ) : (
+                          <Tag
+                            color={nChanged ? "orange" : "green"}
+                            style={{ fontSize: 11 }}
+                          >
+                            {nChanged
+                              ? `${nChanged} diff${nChanged > 1 ? "s" : ""} · ${refLabel}`
+                              : `identique · ${refLabel}`}
+                          </Tag>
+                        ))}
+                    </Space>
+                    <Space
+                      wrap
+                      size={8}
+                      split={
+                        <span style={{ color: "#d9d9d9" }}>·</span>
+                      }
+                      style={{
+                        fontSize: 12,
+                        color: "#8c8c8c",
+                        fontWeight: 400,
+                      }}
                     >
-                      {new Date(a.created_at).toLocaleString("fr-FR")}
-                    </Typography.Text>
-                    {a.edited_at && (
-                      <Tag color="purple" style={{ fontSize: 11 }}>
-                        ÉDITÉ ·{" "}
-                        {new Date(a.edited_at).toLocaleString("fr-FR")}
-                      </Tag>
-                    )}
-                    {analysisView === "diff" &&
-                      (baseDiff == null ? (
-                        <Tag color="default" style={{ fontSize: 11 }}>
-                          {refLabel}
-                        </Tag>
-                      ) : (
-                        <Tag
-                          color={nChanged ? "orange" : "green"}
-                          style={{ fontSize: 11 }}
-                        >
-                          {nChanged
-                            ? `${nChanged} diff${nChanged > 1 ? "s" : ""} · ${refLabel}`
-                            : `identique · ${refLabel}`}
-                        </Tag>
-                      ))}
+                      <span>{a.model_label ?? "—"}</span>
+                      <span>
+                        {new Date(a.created_at).toLocaleString("fr-FR")}
+                      </span>
+                      {a.edited_at && (
+                        <span>
+                          édité{" "}
+                          {new Date(a.edited_at).toLocaleString("fr-FR")}
+                        </span>
+                      )}
+                      {/* Tokens + coût USD de cette inférence. NULL ⇒ analyse
+                          legacy ou status='skipped' (pas d'appel) ⇒ on
+                          n'affiche rien plutôt qu'un "—" trompeur. */}
+                      {(a.input_tokens !== null ||
+                        a.output_tokens !== null) && (
+                        <span>
+                          {(a.input_tokens ?? 0).toLocaleString("fr-FR")} in /{" "}
+                          {(a.output_tokens ?? 0).toLocaleString("fr-FR")} out
+                          {a.cost_usd !== null && (
+                            <>
+                              {" — "}
+                              <strong style={{ color: "#1d39c4" }}>
+                                {a.cost_usd < 0.01
+                                  ? `$${a.cost_usd.toFixed(4)}`
+                                  : a.cost_usd < 1
+                                    ? `$${a.cost_usd.toFixed(3)}`
+                                    : `$${a.cost_usd.toFixed(2)}`}
+                              </strong>
+                            </>
+                          )}
+                        </span>
+                      )}
+                    </Space>
                   </Space>
                 }
                 extra={
