@@ -127,3 +127,90 @@ export interface PromptListItem {
   created_at: string;
   updated_at: string;
 }
+
+// ---------- batchs d'analyses ----------
+// Cf. src/eval/db.ts. Un batch = un lancement (liste d'IDs ou favorites). Les
+// KPIs vivent côté serveur (recompute on the fly depuis le canon courant).
+export type BatchStatus = "running" | "done" | "aborted";
+export type BatchSource = "ids" | "favorites";
+export type BatchVerdict =
+  | "pass"
+  | "regression"
+  | "no_canon"
+  | "skipped"
+  | "error";
+
+export interface BatchRow {
+  id: string;
+  created_at: string;
+  completed_at: string | null;
+  status: BatchStatus;
+  prompt_name: string | null;
+  source: BatchSource;
+  input_count: number;
+  source_ids: string[];
+}
+
+export interface BatchListItem {
+  id: string;
+  created_at: string;
+  completed_at: string | null;
+  status: BatchStatus;
+  prompt_name: string | null;
+  source: BatchSource;
+  input_count: number;
+  n_total: number;
+  n_pass: number;
+  n_regression: number;
+  n_no_canon: number;
+  n_skipped: number;
+  n_error: number;
+}
+
+export interface BatchAnalysisItem {
+  analysis_id: string;
+  conversation_id: string;
+  status: string;
+  is_canon: boolean;
+  created_at: string;
+  has_canon: boolean;
+  new_label: string | null;
+  new_sub_label: string | null;
+  canon_label: string | null;
+  canon_sub_label: string | null;
+  reason: string | null;
+  verdict: BatchVerdict;
+}
+
+export interface LabelBreakdownRow {
+  canon_label: string | null;
+  canon_sub_label: string | null;
+  n: number;
+  pass: number;
+  regression: number;
+  drift_to: string | null;
+}
+
+export interface BatchMetrics {
+  n_total: number;
+  n_pass: number;
+  n_regression: number;
+  n_no_canon: number;
+  n_skipped: number;
+  n_error: number;
+  n_with_canon: number;
+  pass_rate: number | null;
+  by_label: LabelBreakdownRow[];
+  by_sub_label: LabelBreakdownRow[];
+}
+
+export interface BatchListResp {
+  rows: BatchListItem[];
+  total: number;
+}
+
+export interface BatchDetailResp {
+  batch: BatchRow;
+  rows: BatchAnalysisItem[];
+  metrics: BatchMetrics;
+}

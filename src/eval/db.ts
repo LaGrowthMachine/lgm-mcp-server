@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { randomUUID } from "crypto";
 import {
   buildClassifierSystemPrompt,
   CONVERSATION_CLASSIFIER_VERSION,
@@ -159,6 +160,34 @@ export const ensureSchema = async (): Promise<void> => {
       ON conversations (last_at DESC NULLS LAST);
     CREATE INDEX IF NOT EXISTS conversations_msg_count
       ON conversations (msg_count);
+  `);
+
+  // Batchs d'analyses : tout lancement crée une ligne `batches`, et chaque
+  // analyse insérée pendant ce lancement porte sa FK `batch_id`. Idempotent,
+  // non destructif ; analyses legacy gardent `batch_id NULL` (invisibles
+  // dans la liste batchs, intactes côté `/conversations`). `source_ids`
+  // capture le périmètre demandé (résolu côté serveur), pour qu'on sache
+  // après coup ce qui a fini ou pas même si workers ont été tués.
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS batches (
+      id           UUID PRIMARY KEY,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ,
+      status       TEXT NOT NULL DEFAULT 'running',
+      prompt_name  TEXT,
+      source       TEXT NOT NULL,
+      input_count  INT  NOT NULL,
+      source_ids   TEXT[] NOT NULL DEFAULT '{}'
+    );
+    ALTER TABLE batches
+      ADD COLUMN IF NOT EXISTS source_ids TEXT[] NOT NULL DEFAULT '{}';
+    ALTER TABLE analyses
+      ADD COLUMN IF NOT EXISTS batch_id UUID
+        REFERENCES batches(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS analyses_batch
+      ON analyses (batch_id) WHERE batch_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS batches_created_at
+      ON batches (created_at DESC);
   `);
 
   // Seed par famille : défaut analysis (classifier) + défaut reply (playbook
@@ -444,15 +473,18 @@ export const insertAnalysis = async (args: {
   promptName: string | null;
   status: string;
   payload: unknown;
+  batchId?: string;
 }): Promise<{ id: string }> => {
   const { rows } = await getPool().query<{ id: string }>(
-    `INSERT INTO analyses (conversation_id, prompt_name, status, payload)
-     VALUES ($1, $2, $3, $4::jsonb) RETURNING id::text AS id`,
+    `INSERT INTO analyses
+       (conversation_id, prompt_name, status, payload, batch_id)
+     VALUES ($1, $2, $3, $4::jsonb, $5) RETURNING id::text AS id`,
     [
       args.conversationId,
       args.promptName,
       args.status,
       JSON.stringify(args.payload),
+      args.batchId ?? null,
     ],
   );
   return rows[0];
@@ -850,4 +882,325 @@ export const listReplies = async (
     [pageSize, offset],
   );
   return { rows, total: parseInt(totalRes.rows[0].n, 10) };
+};
+
+// ---------- batchs d'analyses ----------
+// Tout lancement client crée une ligne `batches`, et chaque analyse insérée
+// pendant le lancement porte sa FK `batch_id`. KPIs (pass / regression /
+// drift) recalculés au vol depuis le canon courant — pas de snapshot : si
+// le canon change, les chiffres des batchs antérieurs se mettent à jour en
+// conséquence. Scope strict : `suggested_label` + `suggested_sub_label`.
+export type BatchStatus = "running" | "done" | "aborted";
+export type BatchSource = "ids" | "favorites";
+// `skipped` = l'analyseur a délibérément renoncé (ex. : pas de message du
+// lead à classer). N'est ni une erreur ni un échec : pas de signal mais pas
+// de défaut. Le `reason` explicatif vit dans `payload.analysis.reason`.
+export type BatchVerdict =
+  | "pass"
+  | "regression"
+  | "no_canon"
+  | "skipped"
+  | "error";
+
+export interface BatchRow {
+  id: string;
+  created_at: string;
+  completed_at: string | null;
+  status: BatchStatus;
+  prompt_name: string | null;
+  source: BatchSource;
+  input_count: number;
+  source_ids: string[];
+}
+
+export interface BatchListItem {
+  id: string;
+  created_at: string;
+  completed_at: string | null;
+  status: BatchStatus;
+  prompt_name: string | null;
+  source: BatchSource;
+  input_count: number;
+  n_total: number;
+  n_pass: number;
+  n_regression: number;
+  n_no_canon: number;
+  n_skipped: number;
+  n_error: number;
+}
+
+export interface BatchAnalysisItem {
+  analysis_id: string;
+  conversation_id: string;
+  status: string;
+  is_canon: boolean;
+  created_at: string;
+  has_canon: boolean;
+  new_label: string | null;
+  new_sub_label: string | null;
+  canon_label: string | null;
+  canon_sub_label: string | null;
+  reason: string | null;
+  verdict: BatchVerdict;
+}
+
+export interface LabelBreakdownRow {
+  canon_label: string | null;
+  canon_sub_label: string | null;
+  n: number;
+  pass: number;
+  regression: number;
+  drift_to: string | null;
+}
+
+export interface BatchMetrics {
+  n_total: number;
+  n_pass: number;
+  n_regression: number;
+  n_no_canon: number;
+  n_skipped: number;
+  n_error: number;
+  n_with_canon: number;
+  pass_rate: number | null;
+  by_label: LabelBreakdownRow[];
+  by_sub_label: LabelBreakdownRow[];
+}
+
+// Jointure verdict — réutilisée par `listBatches` (agrégé) et
+// `getBatchAnalyses` (détail). Compare la classification de chaque analyse
+// du batch au canon courant de la conv (au plus 1 ligne par conv via
+// l'index `analyses_one_canon`). Verdict cohérent et déterministe.
+const BATCH_JOIN_CTE = `
+  batch_an AS (
+    SELECT a.id::text AS analysis_id, a.batch_id, a.conversation_id,
+           a.status, a.is_canon, a.created_at,
+           a.payload->'analysis'->'classification'->>'suggested_label'
+             AS new_label,
+           a.payload->'analysis'->'classification'->>'suggested_sub_label'
+             AS new_sub_label,
+           a.payload->'analysis'->>'reason' AS reason
+    FROM analyses a
+    WHERE a.batch_id IS NOT NULL
+  ),
+  canon_an AS (
+    SELECT a.conversation_id,
+           a.payload->'analysis'->'classification'->>'suggested_label'
+             AS canon_label,
+           a.payload->'analysis'->'classification'->>'suggested_sub_label'
+             AS canon_sub_label
+    FROM analyses a WHERE a.is_canon = true
+  ),
+  joined AS (
+    SELECT b.*, c.canon_label, c.canon_sub_label,
+           (c.conversation_id IS NOT NULL) AS has_canon,
+           CASE
+             WHEN b.status = 'skipped' THEN 'skipped'
+             WHEN b.status <> 'ok'     THEN 'error'
+             WHEN c.conversation_id IS NULL THEN 'no_canon'
+             WHEN b.new_label     IS NOT DISTINCT FROM c.canon_label
+              AND b.new_sub_label IS NOT DISTINCT FROM c.canon_sub_label
+                THEN 'pass'
+             ELSE 'regression'
+           END AS verdict
+    FROM batch_an b LEFT JOIN canon_an c USING (conversation_id)
+  )
+`;
+
+const selectBatchCols = `id, created_at::text AS created_at,
+  completed_at::text AS completed_at,
+  status, prompt_name, source, input_count, source_ids`;
+
+export const createBatch = async (args: {
+  promptName: string | null;
+  source: BatchSource;
+  sourceIds: string[];
+}): Promise<BatchRow> => {
+  const id = randomUUID();
+  const { rows } = await getPool().query<BatchRow>(
+    `INSERT INTO batches (id, prompt_name, source, input_count, source_ids)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING ${selectBatchCols}`,
+    [id, args.promptName, args.source, args.sourceIds.length, args.sourceIds],
+  );
+  return rows[0];
+};
+
+// Transition `running` → `done` ou `aborted` ; no-op si déjà terminal.
+export const updateBatchStatus = async (
+  id: string,
+  status: "done" | "aborted",
+): Promise<boolean> => {
+  const { rowCount } = await getPool().query(
+    `UPDATE batches
+        SET status = $2, completed_at = now()
+      WHERE id = $1 AND status = 'running'`,
+    [id, status],
+  );
+  return (rowCount ?? 0) > 0;
+};
+
+export const getBatch = async (id: string): Promise<BatchRow | null> => {
+  const { rows } = await getPool().query<BatchRow>(
+    `SELECT ${selectBatchCols} FROM batches WHERE id = $1`,
+    [id],
+  );
+  return rows[0] ?? null;
+};
+
+export const listBatches = async (
+  page: number,
+  pageSize: number,
+): Promise<{ rows: BatchListItem[]; total: number }> => {
+  const offset = (page - 1) * pageSize;
+  const p = getPool();
+  const totalRes = await p.query<{ n: string }>(
+    "SELECT count(*)::text AS n FROM batches",
+  );
+  const { rows } = await p.query<BatchListItem>(
+    `WITH ${BATCH_JOIN_CTE},
+     agg AS (
+       SELECT batch_id,
+              count(*)::int                                       AS n_total,
+              count(*) FILTER (WHERE verdict='pass')::int         AS n_pass,
+              count(*) FILTER (WHERE verdict='regression')::int   AS n_regression,
+              count(*) FILTER (WHERE verdict='no_canon')::int     AS n_no_canon,
+              count(*) FILTER (WHERE verdict='skipped')::int      AS n_skipped,
+              count(*) FILTER (WHERE verdict='error')::int        AS n_error
+       FROM joined GROUP BY batch_id
+     )
+     SELECT b.id,
+            b.created_at::text   AS created_at,
+            b.completed_at::text AS completed_at,
+            b.status, b.prompt_name, b.source, b.input_count,
+            COALESCE(a.n_total, 0)      AS n_total,
+            COALESCE(a.n_pass, 0)       AS n_pass,
+            COALESCE(a.n_regression, 0) AS n_regression,
+            COALESCE(a.n_no_canon, 0)   AS n_no_canon,
+            COALESCE(a.n_skipped, 0)    AS n_skipped,
+            COALESCE(a.n_error, 0)      AS n_error
+       FROM batches b LEFT JOIN agg a ON a.batch_id = b.id
+      ORDER BY b.created_at DESC
+      LIMIT $1 OFFSET $2`,
+    [pageSize, offset],
+  );
+  return { rows, total: parseInt(totalRes.rows[0].n, 10) };
+};
+
+export const getBatchAnalyses = async (
+  batchId: string,
+): Promise<BatchAnalysisItem[]> => {
+  const { rows } = await getPool().query<BatchAnalysisItem>(
+    `WITH ${BATCH_JOIN_CTE}
+     SELECT analysis_id, conversation_id, status, is_canon,
+            created_at::text AS created_at,
+            has_canon, new_label, new_sub_label,
+            canon_label, canon_sub_label, reason, verdict
+       FROM joined
+      WHERE batch_id = $1
+      ORDER BY created_at ASC`,
+    [batchId],
+  );
+  return rows;
+};
+
+// Aggrège le breakdown par label puis par (label, sub_label) à partir de
+// la liste jointe — peu de lignes par batch, autant le faire en JS plutôt
+// qu'en SQL gymnastique. `drift_to` = destination la plus fréquente parmi
+// les régressions du bucket (libellé de la classe perdue).
+export const computeBatchMetricsFromRows = (
+  rows: BatchAnalysisItem[],
+): BatchMetrics => {
+  let n_pass = 0;
+  let n_regression = 0;
+  let n_no_canon = 0;
+  let n_skipped = 0;
+  let n_error = 0;
+  let n_with_canon = 0;
+  for (const r of rows) {
+    if (r.has_canon) n_with_canon++;
+    if (r.verdict === "pass") n_pass++;
+    else if (r.verdict === "regression") n_regression++;
+    else if (r.verdict === "no_canon") n_no_canon++;
+    else if (r.verdict === "skipped") n_skipped++;
+    else if (r.verdict === "error") n_error++;
+  }
+  const pass_rate =
+    n_pass + n_regression > 0 ? n_pass / (n_pass + n_regression) : null;
+
+  type Acc = {
+    canon_label: string | null;
+    canon_sub_label: string | null;
+    n: number;
+    pass: number;
+    regression: number;
+    drift: Map<string, number>;
+  };
+  const bucket = (
+    keyOf: (r: BatchAnalysisItem) => string,
+    canonOf: (
+      r: BatchAnalysisItem,
+    ) => { l: string | null; sl: string | null },
+    destOf: (r: BatchAnalysisItem) => string | null,
+  ): LabelBreakdownRow[] => {
+    const m = new Map<string, Acc>();
+    for (const r of rows) {
+      if (r.verdict !== "pass" && r.verdict !== "regression") continue;
+      const k = keyOf(r);
+      let a = m.get(k);
+      if (!a) {
+        const ck = canonOf(r);
+        a = {
+          canon_label: ck.l,
+          canon_sub_label: ck.sl,
+          n: 0,
+          pass: 0,
+          regression: 0,
+          drift: new Map(),
+        };
+        m.set(k, a);
+      }
+      a.n++;
+      if (r.verdict === "pass") a.pass++;
+      else {
+        a.regression++;
+        const d = destOf(r);
+        if (d !== null) a.drift.set(d, (a.drift.get(d) ?? 0) + 1);
+      }
+    }
+    return [...m.values()]
+      .map((a) => ({
+        canon_label: a.canon_label,
+        canon_sub_label: a.canon_sub_label,
+        n: a.n,
+        pass: a.pass,
+        regression: a.regression,
+        drift_to:
+          [...a.drift.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? null,
+      }))
+      .sort((x, y) => y.n - x.n);
+  };
+
+  const by_label = bucket(
+    (r) => `${r.canon_label ?? "__null__"}`,
+    (r) => ({ l: r.canon_label, sl: null }),
+    (r) => r.new_label,
+  );
+  const by_sub_label = bucket(
+    (r) => `${r.canon_label ?? "__null__"}|${r.canon_sub_label ?? "__null__"}`,
+    (r) => ({ l: r.canon_label, sl: r.canon_sub_label }),
+    (r) => r.new_sub_label,
+  );
+
+  return {
+    n_total: rows.length,
+    n_pass,
+    n_regression,
+    n_no_canon,
+    n_skipped,
+    n_error,
+    n_with_canon,
+    pass_rate,
+    by_label,
+    by_sub_label,
+  };
 };

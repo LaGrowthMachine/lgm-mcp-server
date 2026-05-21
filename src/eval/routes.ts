@@ -10,6 +10,8 @@ const asKind = (v: unknown): db.PromptKind =>
   v === "reply" ? "reply" : "analysis";
 
 const HEX24 = /^[a-f0-9]{24}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const parseUserIds = (raw: string): string[] => {
   let tokens: string[];
@@ -102,6 +104,11 @@ evalRouter.post(
     const promptName = req.body?.promptName
       ? String(req.body.promptName)
       : undefined;
+    const batchId = req.body?.batchId ? String(req.body.batchId) : undefined;
+    if (batchId !== undefined && !UUID_RE.test(batchId)) {
+      res.status(400).json({ error: "batchId invalide" });
+      return;
+    }
     const result = await analyzeConversationWithDbPrompt(id, promptName);
     await db.upsertConversation(id, result.conversation);
     const payload = {
@@ -113,6 +120,7 @@ evalRouter.post(
       promptName: result.promptName,
       status: result.analysis.status,
       payload,
+      batchId,
     });
 
     // Comparaison déterministe au canon courant (si présent).
@@ -137,6 +145,92 @@ evalRouter.get(
   "/analyze/favorites/ids",
   wrap(async (_req, res) => {
     res.json({ ids: await db.favoriteConversationIds() });
+  }),
+);
+
+// ---------- batchs d'analyses ----------
+// Création : le serveur résout/déduplique les IDs (favorites OU liste cliente
+// filtrée HEX24) et les fige dans `source_ids`. Cycle de vie ensuite côté
+// client : il appelle POST /analyze/:id avec `batchId` pour chaque ID, puis
+// PATCH /batches/:id { status: "done"|"aborted" } à la fin.
+evalRouter.post(
+  "/batches",
+  wrap(async (req, res) => {
+    const promptName = req.body?.promptName
+      ? String(req.body.promptName)
+      : null;
+    const source: db.BatchSource =
+      req.body?.source === "favorites" ? "favorites" : "ids";
+    let ids: string[];
+    if (source === "favorites") {
+      ids = await db.favoriteConversationIds();
+    } else {
+      const raw: unknown[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
+      ids = [
+        ...new Set(
+          raw.map((v) => String(v)).filter((s) => HEX24.test(s)),
+        ),
+      ];
+    }
+    if (ids.length === 0) {
+      res.status(400).json({ error: "aucune conversation à analyser" });
+      return;
+    }
+    const batch = await db.createBatch({
+      promptName,
+      source,
+      sourceIds: ids,
+    });
+    res.json(batch);
+  }),
+);
+
+evalRouter.get(
+  "/batches",
+  wrap(async (req, res) => {
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+    const pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(String(req.query.pageSize ?? "20"), 10) || 20),
+    );
+    res.json(await db.listBatches(page, pageSize));
+  }),
+);
+
+evalRouter.get(
+  "/batches/:id",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "batchId invalide" });
+      return;
+    }
+    const batch = await db.getBatch(id);
+    if (!batch) {
+      res.status(404).json({ error: "batch inconnu" });
+      return;
+    }
+    const rows = await db.getBatchAnalyses(id);
+    const metrics = db.computeBatchMetricsFromRows(rows);
+    res.json({ batch, rows, metrics });
+  }),
+);
+
+evalRouter.patch(
+  "/batches/:id",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "batchId invalide" });
+      return;
+    }
+    const status = req.body?.status;
+    if (status !== "done" && status !== "aborted") {
+      res.status(400).json({ error: "status doit être done|aborted" });
+      return;
+    }
+    await db.updateBatchStatus(id, status);
+    res.json({ ok: true });
   }),
 );
 

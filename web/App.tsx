@@ -15,7 +15,8 @@ import {
   Navigate,
 } from "react-router-dom";
 import { Discover } from "./pages/Discover";
-import { Analyze } from "./pages/Analyze";
+import { Batches } from "./pages/Batches";
+import { BatchDetail } from "./pages/BatchDetail";
 import { GenerateReplies } from "./pages/GenerateReplies";
 import { Conversations } from "./pages/Conversations";
 import { RepliesList } from "./pages/RepliesList";
@@ -31,9 +32,9 @@ const NAV = [
     label: "Trouver des conversations",
   },
   {
-    key: "/analyze",
+    key: "/batches",
     icon: <ExperimentOutlined />,
-    label: "Analyse de conversations",
+    label: "Analyses en batch",
   },
   { key: "/generate", icon: <SendOutlined />, label: "Générer des réponses" },
   {
@@ -110,7 +111,8 @@ export function Shell() {
             <Routes>
               <Route path="/" element={<Navigate to="/discover" replace />} />
               <Route path="/discover" element={<Discover />} />
-              <Route path="/analyze" element={<Analyze />} />
+              <Route path="/batches" element={<Batches />} />
+              <Route path="/batches/:id" element={<BatchDetail />} />
               <Route path="/generate" element={<GenerateReplies />} />
               <Route path="/conversations" element={<Conversations />} />
               <Route
