@@ -13,43 +13,21 @@ import { Link, useNavigate } from "react-router-dom";
 import { http, BatchRow, BatchListItem, BatchListResp } from "../api";
 import { PromptSelect } from "../PromptSelect";
 import { ModelSelect } from "../ModelSelect";
-
-const HEX24 = /^[a-f0-9]{24}$/i;
-const parseIds = (raw: string): string[] => [
-  ...new Set(
-    raw
-      .split(/[\s,;]+/)
-      .map((t) => t.trim())
-      .filter((t) => HEX24.test(t)),
-  ),
-];
-
-const fmtDateTime = (iso: string): string =>
-  new Date(iso).toLocaleString("fr-FR");
-
-const fmtPct = (n: number | null): string =>
-  n === null ? "—" : `${Math.round(n * 100)} %`;
-
-const fmtCost = (n: number | null): string => {
-  if (n === null || n === undefined) return "—";
-  if (n === 0) return "$0";
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  if (n < 1) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(2)}`;
-};
-
-const fmtTokensCompact = (n: number | null): string => {
-  if (n === null || n === undefined) return "—";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
-  return String(n);
-};
+import { LGM_COLORS, MONO_STACK } from "../theme";
+import { PageHeader } from "../components/PageHeader";
+import {
+  parseConvIds,
+  fmtDateTime,
+  fmtPct,
+  fmtCost,
+  fmtTokensCompact,
+} from "../format";
 
 const statusTag = (s: BatchListItem["status"]) =>
   s === "running" ? (
     <Tag color="processing">en cours</Tag>
   ) : s === "done" ? (
-    <Tag color="green">terminé</Tag>
+    <Tag color="success">terminé</Tag>
   ) : (
     <Tag>arrêté</Tag>
   );
@@ -102,7 +80,7 @@ export function Batches() {
       if (promptSel) body.promptName = promptSel;
       if (modelSel) body.modelId = modelSel;
       if (source === "ids") {
-        const list = parseIds(ids);
+        const list = parseConvIds(ids);
         if (list.length === 0) {
           message.warning("Aucun conversationId valide");
           return;
@@ -126,22 +104,24 @@ export function Batches() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Typography.Title level={3} style={{ marginTop: 0 }}>
-        Analyses en batch
-      </Typography.Title>
-      <Typography.Paragraph type="secondary">
-        Chaque lancement crée un <strong>batch</strong> persisté
-        (partageable / revisitable). Le prompt est figé au lancement, les
-        analyses sont liées au batch, et les KPIs (pass / régression) sont
-        comparés au canon courant de chaque conversation.
-      </Typography.Paragraph>
+      <PageHeader
+        title="Batchs"
+        description={
+          <>
+            Chaque lancement crée un <strong>batch</strong> persisté
+            (partageable / revisitable). Le prompt est figé au lancement, les
+            analyses sont liées au batch, et les KPIs (pass / régression) sont
+            comparés au canon courant de chaque conversation.
+          </>
+        }
+      />
 
       <Input.TextArea
         rows={4}
         value={ids}
         onChange={(e) => setIds(e.target.value)}
         placeholder="conversationId séparés par virgules / espaces"
-        style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
+        style={{ fontFamily: MONO_STACK, fontSize: 13 }}
       />
       <Space wrap>
         <PromptSelect
@@ -170,7 +150,7 @@ export function Batches() {
         Historique
       </Typography.Title>
       <Table
-        size="small"
+        size="middle"
         rowKey="id"
         loading={loading}
         dataSource={rows}
@@ -193,7 +173,11 @@ export function Batches() {
             dataIndex: "source",
             width: 110,
             render: (v: BatchListItem["source"]) =>
-              v === "favorites" ? <Tag color="gold">★ favorites</Tag> : <Tag>liste</Tag>,
+              v === "favorites" ? (
+                <Tag color="gold">★ favorites</Tag>
+              ) : (
+                <Tag>liste</Tag>
+              ),
           },
           {
             title: "prompt",
@@ -227,10 +211,10 @@ export function Batches() {
             dataIndex: "n_regression",
             width: 110,
             render: (n: number) =>
-              n > 0 ? <Tag color="orange">{n}</Tag> : "—",
+              n > 0 ? <Tag color="warning">{n}</Tag> : "—",
           },
           {
-            title: "skipped",
+            title: "ignorées",
             dataIndex: "n_skipped",
             width: 90,
             render: (n: number) => (n > 0 ? <Tag>{n}</Tag> : "—"),
@@ -239,7 +223,8 @@ export function Batches() {
             title: "erreurs",
             dataIndex: "n_error",
             width: 90,
-            render: (n: number) => (n > 0 ? <Tag color="red">{n}</Tag> : "—"),
+            render: (n: number) =>
+              n > 0 ? <Tag color="error">{n}</Tag> : "—",
           },
           {
             // Cellule compacte : coût en gras + total tokens en gris dessous.
@@ -255,7 +240,9 @@ export function Batches() {
               return (
                 <div style={{ lineHeight: 1.15 }}>
                   <div style={{ fontWeight: 600 }}>{fmtCost(r.cost_usd)}</div>
-                  <div style={{ fontSize: 11, color: "#999" }}>
+                  <div
+                    style={{ fontSize: 11, color: LGM_COLORS.textTertiary }}
+                  >
                     {fmtTokensCompact(tot)} tok
                   </div>
                 </div>

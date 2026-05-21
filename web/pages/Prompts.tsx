@@ -12,7 +12,12 @@ import {
   Segmented,
   Tooltip,
 } from "antd";
+import { FileTextOutlined } from "@ant-design/icons";
 import { http, PromptListItem, PromptKind } from "../api";
+import { PageHeader } from "../components/PageHeader";
+import { MONO_STACK } from "../theme";
+import { EmptyState } from "../components/EmptyState";
+import { fmtDateTime } from "../format";
 
 export function Prompts() {
   const { message } = App.useApp();
@@ -138,35 +143,45 @@ export function Prompts() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Space
-        style={{ width: "100%", justifyContent: "space-between" }}
-        align="start"
-      >
-        <div>
-          <Typography.Title level={3} style={{ marginTop: 0 }}>
-            Prompts
-          </Typography.Title>
-          <Segmented
-            value={kind}
-            onChange={(v) => setKind(v as PromptKind)}
-            options={[
-              { label: "Analyse", value: "analysis" },
-              { label: "Réponse", value: "reply" },
-            ]}
-            style={{ marginBottom: 8 }}
-          />
-        </div>
-        <Button type="primary" onClick={openCreate}>
-          + Nouveau brouillon
-        </Button>
-      </Space>
+      <PageHeader
+        title="Prompts"
+        description="Versionne les prompts d'analyse et de réponse. Workflow brouillon → validé (figé) → live (utilisé par défaut)."
+        actions={
+          <Button type="primary" onClick={openCreate}>
+            + Nouveau brouillon
+          </Button>
+        }
+      />
+
+      <Segmented
+        value={kind}
+        onChange={(v) => setKind(v as PromptKind)}
+        options={[
+          { label: "Analyse", value: "analysis" },
+          { label: "Réponse", value: "reply" },
+        ]}
+      />
 
       <Table
-        size="small"
+        size="middle"
         rowKey="name"
         loading={loading}
         dataSource={list}
         pagination={false}
+        locale={{
+          emptyText: (
+            <EmptyState
+              icon={<FileTextOutlined />}
+              title="Aucun prompt"
+              hint="Crée un nouveau brouillon pour démarrer une famille de prompts."
+              action={
+                <Button type="primary" onClick={openCreate}>
+                  + Nouveau brouillon
+                </Button>
+              }
+            />
+          ),
+        }}
         columns={[
           {
             title: "nom / version",
@@ -175,11 +190,11 @@ export function Prompts() {
               <Space>
                 <strong>{n}</strong>
                 {r.status === "validated" ? (
-                  <Tag color="green">VALIDÉ</Tag>
+                  <Tag color="success">validé</Tag>
                 ) : (
-                  <Tag color="orange">BROUILLON</Tag>
+                  <Tag color="warning">brouillon</Tag>
                 )}
-                {r.is_active && <Tag color="blue">LIVE</Tag>}
+                {r.is_active && <Tag color="blue">live</Tag>}
                 {r.used && <Tag>utilisé</Tag>}
               </Space>
             ),
@@ -188,14 +203,13 @@ export function Prompts() {
             title: "validé le",
             dataIndex: "validated_at",
             width: 170,
-            render: (v: string | null) =>
-              v ? new Date(v).toLocaleString("fr-FR") : "—",
+            render: (v: string | null) => fmtDateTime(v),
           },
           {
             title: "modifié",
             dataIndex: "updated_at",
             width: 170,
-            render: (v: string) => new Date(v).toLocaleString("fr-FR"),
+            render: (v: string) => fmtDateTime(v),
           },
           {
             title: "actions",
@@ -245,7 +259,7 @@ export function Prompts() {
                   {lockReason ? (
                     <Tooltip title={lockReason}>
                       <Button size="small" danger disabled>
-                        Suppr.
+                        Supprimer
                       </Button>
                     </Tooltip>
                   ) : (
@@ -254,7 +268,7 @@ export function Prompts() {
                       onConfirm={() => del(r.name)}
                     >
                       <Button size="small" danger>
-                        Suppr.
+                        Supprimer
                       </Button>
                     </Popconfirm>
                   )}
@@ -301,7 +315,7 @@ export function Prompts() {
               autoSize={{ minRows: 16, maxRows: 30 }}
               style={{
                 marginTop: 4,
-                fontFamily: "ui-monospace, monospace",
+                fontFamily: MONO_STACK,
                 fontSize: 12.5,
               }}
             />

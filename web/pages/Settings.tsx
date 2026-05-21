@@ -1,32 +1,30 @@
 import { useEffect, useState } from "react";
-import { Button, Card, Select, Space, Typography, message } from "antd";
-import { http, Model, DefaultModelResp } from "../api";
+import { Button, Card, Space, Typography, App } from "antd";
+import { http, DefaultModelResp } from "../api";
+import { PageHeader } from "../components/PageHeader";
+import { ModelSelect } from "../ModelSelect";
 
-// Settings globaux. Pour l'instant uniquement le choix du modèle d'inférence
+// Réglages globaux. Pour l'instant uniquement le choix du modèle d'inférence
 // par défaut. Stocké dans la table `settings` (k/v générique), pas en flag
 // sur les modèles — permet d'ajouter d'autres réglages au même endroit.
 
 export function Settings() {
-  const [models, setModels] = useState<Model[]>([]);
+  const { message } = App.useApp();
   const [defaultModel, setDefaultModel] = useState<DefaultModelResp | null>(
     null,
   );
-  const [draftDefaultId, setDraftDefaultId] = useState<string | undefined>(
-    undefined,
-  );
+  const [draftDefaultId, setDraftDefaultId] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const reload = async () => {
     setLoading(true);
     try {
-      const [a, b] = await Promise.all([
-        http.get<Model[]>("/models", { params: { archived: "0" } }),
-        http.get<DefaultModelResp>("/settings/default-model"),
-      ]);
-      setModels(a.data);
-      setDefaultModel(b.data);
-      setDraftDefaultId(b.data.modelId ?? undefined);
+      const { data } = await http.get<DefaultModelResp>(
+        "/settings/default-model",
+      );
+      setDefaultModel(data);
+      setDraftDefaultId(data.modelId ?? "");
     } finally {
       setLoading(false);
     }
@@ -55,13 +53,14 @@ export function Settings() {
     }
   };
 
-  const draftChanged = draftDefaultId !== (defaultModel?.modelId ?? undefined);
+  const draftChanged = draftDefaultId !== (defaultModel?.modelId ?? "");
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Typography.Title level={3} style={{ marginTop: 0 }}>
-        Settings
-      </Typography.Title>
+      <PageHeader
+        title="Réglages"
+        description="Configuration globale de l'environnement. Affecte les batchs et analyses lancés sans modèle explicite."
+      />
 
       <Card title="Modèle par défaut">
         <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
@@ -70,13 +69,11 @@ export function Settings() {
           Les modèles se gèrent dans la page <strong>Modèles</strong>.
         </Typography.Paragraph>
         <Space wrap>
-          <Select
+          <ModelSelect
             value={draftDefaultId}
-            onChange={(v) => setDraftDefaultId(v)}
-            options={models.map((m) => ({ value: m.id, label: m.label }))}
-            placeholder="Choisir un modèle"
-            style={{ minWidth: 320 }}
+            onChange={setDraftDefaultId}
             disabled={loading}
+            style={{ minWidth: 320 }}
           />
           <Button
             type="primary"

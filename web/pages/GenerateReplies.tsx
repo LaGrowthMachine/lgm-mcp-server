@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Typography,
   Input,
@@ -9,34 +9,29 @@ import {
   Progress,
   App,
   Popconfirm,
-  Select,
 } from "antd";
 import { Link } from "react-router-dom";
-import { http, GenerateReplyResp, PromptListItem } from "../api";
+import { http, GenerateReplyResp } from "../api";
+import { LGM_COLORS, MONO_STACK } from "../theme";
+import { PageHeader } from "../components/PageHeader";
+import { PromptSelect } from "../PromptSelect";
+import { parseConvIds } from "../format";
 
 interface Row extends GenerateReplyResp {
   key: string;
   error?: string;
 }
 
-const HEX24 = /^[a-f0-9]{24}$/i;
-const parseIds = (raw: string): string[] => [
-  ...new Set(
-    raw
-      .split(/[\s,;]+/)
-      .map((t) => t.trim())
-      .filter((t) => HEX24.test(t)),
-  ),
-];
-
 const verdictTag = (r: Row) => {
-  if (r.error) return <Tag color="red">erreur</Tag>;
+  if (r.error) return <Tag color="error">erreur</Tag>;
   if (r.status === "skipped") return <Tag>ignoré</Tag>;
   if (!r.hasFavorite) return <Tag>pas de référence</Tag>;
   if (r.vsFavorite.verdict === "match")
-    return <Tag color="green">= favorite ✓</Tag>;
+    return <Tag color="success">= retenue ✓</Tag>;
   if (r.vsFavorite.verdict === "diff")
-    return <Tag color="orange">≠ favorite ({r.vsFavorite.changes.length})</Tag>;
+    return (
+      <Tag color="warning">≠ retenue ({r.vsFavorite.changes.length})</Tag>
+    );
   return <Tag>incomparable</Tag>;
 };
 
@@ -49,15 +44,7 @@ export function GenerateReplies() {
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(0);
   const [total, setTotal] = useState(0);
-  const [prompts, setPrompts] = useState<PromptListItem[]>([]);
   const [promptSel, setPromptSel] = useState<string>(""); // "" = live
-
-  useEffect(() => {
-    http
-      .get("/prompts", { params: { kind: "reply" } })
-      .then(({ data }) => setPrompts(data.prompts))
-      .catch(() => {});
-  }, []);
 
   const runList = async (list: string[]) => {
     if (list.length === 0) {
@@ -116,7 +103,7 @@ export function GenerateReplies() {
 
   const favoriteAll = async () => {
     await http.post("/replies/favorite-batch", { ids: okIds });
-    message.success(`${okIds.length} réponse(s) favoritée(s)`);
+    message.success(`${okIds.length} réponse(s) marquée(s) retenue(s)`);
   };
   const deleteAll = async () => {
     await http.post("/replies/delete-batch", { ids: okIds });
@@ -125,7 +112,7 @@ export function GenerateReplies() {
   };
   const setFav = async (id: string) => {
     await http.post(`/replies/${id}/favorite`, { value: true });
-    message.success("Réponse favoritée (référence de la conv)");
+    message.success("Réponse marquée retenue (référence de la conv)");
   };
   const del = async (id: string, key: string) => {
     await http.delete(`/replies/${id}`);
@@ -134,40 +121,37 @@ export function GenerateReplies() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Typography.Title level={3} style={{ marginTop: 0 }}>
-        Générer des réponses
-      </Typography.Title>
-      <Typography.Paragraph type="secondary">
-        Génère une réponse avec le prompt réponse <strong>live</strong> (dernier
-        validé) — ou un brouillon précis sélectionné ci-dessous, pour le tester
-        avant de le valider (1 inférence / conv). Chaque réponse est comparée à
-        la réponse <strong>favoritée</strong> de la conv.
-      </Typography.Paragraph>
+      <PageHeader
+        title="Générer des réponses"
+        description={
+          <>
+            Génère une réponse avec le prompt réponse <strong>live</strong>{" "}
+            (dernier validé) — ou un brouillon précis sélectionné ci-dessous,
+            pour le tester avant de le valider (1 inférence / conv). Chaque
+            réponse est comparée à la réponse <strong>retenue</strong> de la
+            conv.
+          </>
+        }
+      />
 
       <Input.TextArea
         rows={4}
         value={ids}
         onChange={(e) => setIds(e.target.value)}
         placeholder="conversationId séparés par virgules / espaces"
-        style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
+        style={{ fontFamily: MONO_STACK, fontSize: 13 }}
       />
       <Space wrap>
-        <Select
+        <PromptSelect
+          kind="reply"
           value={promptSel}
           onChange={setPromptSel}
-          style={{ minWidth: 280 }}
-          options={[
-            { value: "", label: "Prompt live (dernier validé)" },
-            ...prompts.map((p) => ({
-              value: p.name,
-              label: `${p.name} — ${p.status === "validated" ? "validé" : "brouillon"}`,
-            })),
-          ]}
+          disabled={running}
         />
         <Button
           type="primary"
           loading={running}
-          onClick={() => runList(parseIds(ids))}
+          onClick={() => runList(parseConvIds(ids))}
         >
           Générer pour la liste
         </Button>
@@ -187,11 +171,11 @@ export function GenerateReplies() {
         <>
           <Space>
             <Popconfirm
-              title="Favoriter toutes ces réponses (référence par conv) ?"
+              title="Marquer toutes ces réponses comme retenues (référence par conv) ?"
               onConfirm={favoriteAll}
             >
               <Button type="primary" disabled={!okIds.length}>
-                Tout favoriter
+                Tout marquer retenu
               </Button>
             </Popconfirm>
             <Popconfirm
@@ -223,7 +207,7 @@ export function GenerateReplies() {
                       style={{
                         whiteSpace: "pre-wrap",
                         fontSize: 13,
-                        background: "#f6f8f7",
+                        background: LGM_COLORS.surfaceSubtle,
                         padding: 12,
                         borderRadius: 6,
                       }}
@@ -253,7 +237,7 @@ export function GenerateReplies() {
                 ),
               },
               {
-                title: "vs favorite",
+                title: "vs retenue",
                 width: 170,
                 render: (_: unknown, r: Row) => verdictTag(r),
               },
@@ -268,7 +252,7 @@ export function GenerateReplies() {
                         size="small"
                         onClick={() => setFav(r.replyId as string)}
                       >
-                        Favoriter
+                        Marquer retenue
                       </Button>
                       <Button
                         size="small"

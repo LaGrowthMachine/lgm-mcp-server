@@ -7,34 +7,24 @@ import {
   Switch,
   Select,
   InputNumber,
-  Statistic,
   Tag,
   Popconfirm,
   App,
 } from "antd";
 import type { TablePaginationConfig } from "antd";
 import type { SorterResult } from "antd/es/table/interface";
-import { StarFilled, StarOutlined } from "@ant-design/icons";
+import {
+  StarFilled,
+  StarOutlined,
+  MessageOutlined,
+} from "@ant-design/icons";
 import { Link } from "react-router-dom";
 import { http, ConvListRow, ConvListMetrics } from "../api";
-
-const fmtAgo = (iso: string | null): string => {
-  if (!iso) return "—";
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return "—";
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 60) return "à l'instant";
-  const m = s / 60;
-  if (m < 60) return `il y a ${Math.floor(m)} min`;
-  const h = m / 60;
-  if (h < 24) return `il y a ${Math.floor(h)} h`;
-  const d = h / 24;
-  if (d < 30) return `il y a ${Math.floor(d)} j`;
-  return new Date(iso).toLocaleDateString("fr-FR");
-};
-
-const fmtDate = (iso: string | null): string =>
-  iso ? new Date(iso).toLocaleDateString("fr-FR") : "—";
+import { LGM_COLORS } from "../theme";
+import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/EmptyState";
+import { KpiStat } from "../components/KpiStat";
+import { fmtAgo, fmtDate } from "../format";
 
 export function Conversations() {
   const { message } = App.useApp();
@@ -125,9 +115,10 @@ export function Conversations() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Typography.Title level={3} style={{ marginTop: 0 }}>
-        Liste conversations
-      </Typography.Title>
+      <PageHeader
+        title="Conversations"
+        description="Bibliothèque des conversations analysées. Marque-en une en favorite pour la retrouver vite, et définis-lui un canon (analyse de référence) pour qu'elle soit comparée dans les batchs."
+      />
 
       <Space wrap size="middle">
         <Space>
@@ -176,31 +167,37 @@ export function Conversations() {
       </Space>
 
       {metrics && (
-        <Space size="large" wrap>
-          <Statistic title="Conversations" value={metrics.count} />
-          <Statistic title="Favorites" value={metrics.favorites} />
-          <Statistic title="Avec canon" value={metrics.with_canon} />
-          <Statistic
-            title="Moy. messages"
-            value={metrics.avg_messages ?? "—"}
+        <Space size="large" wrap align="start">
+          <KpiStat label="Conversations" value={metrics.count} />
+          <KpiStat label="Favorites" value={metrics.favorites} />
+          <KpiStat label="Avec canon" value={metrics.with_canon} />
+          <KpiStat label="Moy. messages" value={metrics.avg_messages ?? "—"} />
+          <KpiStat
+            label="Période"
+            value={
+              <span style={{ fontSize: 14, fontWeight: 500 }}>
+                {fmtDate(metrics.period_from)} → {fmtDate(metrics.period_to)}
+              </span>
+            }
           />
-          <div>
-            <Typography.Text type="secondary" style={{ fontSize: 14 }}>
-              Période
-            </Typography.Text>
-            <div style={{ fontSize: 16 }}>
-              {fmtDate(metrics.period_from)} → {fmtDate(metrics.period_to)}
-            </div>
-          </div>
         </Space>
       )}
 
       <Table
-        size="small"
+        size="middle"
         rowKey="conversation_id"
         loading={loading}
         dataSource={rows}
         onChange={onTableChange}
+        locale={{
+          emptyText: (
+            <EmptyState
+              icon={<MessageOutlined />}
+              title="Aucune conversation"
+              hint="Lance un Trouver pour découvrir des conversations à analyser."
+            />
+          ),
+        }}
         pagination={{
           current: page,
           pageSize,
@@ -220,7 +217,7 @@ export function Conversations() {
                 type="text"
                 icon={
                   r.is_favorite ? (
-                    <StarFilled style={{ color: "#f0a500" }} />
+                    <StarFilled style={{ color: LGM_COLORS.warning }} />
                   ) : (
                     <StarOutlined />
                   )
@@ -292,7 +289,7 @@ export function Conversations() {
           },
           {
             title: "actions",
-            width: 160,
+            width: 180,
             render: (_: unknown, r: ConvListRow) => (
               <Space>
                 <Link to={`/conversations/${r.conversation_id}`}>
@@ -303,7 +300,7 @@ export function Conversations() {
                   onConfirm={() => del(r.conversation_id)}
                 >
                   <Button size="small" danger>
-                    Suppr.
+                    Supprimer
                   </Button>
                 </Popconfirm>
               </Space>

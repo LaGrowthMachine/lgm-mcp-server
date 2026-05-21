@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Typography, Table, Tag, Button, Space, Popconfirm, App } from "antd";
+import { CommentOutlined } from "@ant-design/icons";
 import { Link } from "react-router-dom";
 import { http, ReplyListItem } from "../api";
+import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/EmptyState";
+import { fmtDateTime } from "../format";
 
 export function RepliesList() {
   const { message } = App.useApp();
@@ -37,14 +41,24 @@ export function RepliesList() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Typography.Title level={3} style={{ marginTop: 0 }}>
-        Liste réponses
-      </Typography.Title>
+      <PageHeader
+        title="Réponses"
+        description="Toutes les réponses générées par l'assistant, toutes conversations confondues. Les « retenues » servent de référence pour comparer les nouvelles générations."
+      />
       <Table
-        size="small"
+        size="middle"
         rowKey="id"
         loading={loading}
         dataSource={rows}
+        locale={{
+          emptyText: (
+            <EmptyState
+              icon={<CommentOutlined />}
+              title="Aucune réponse"
+              hint="Génère une réponse depuis une conversation pour voir apparaître l'historique ici."
+            />
+          ),
+        }}
         pagination={{
           current: page,
           pageSize,
@@ -64,11 +78,11 @@ export function RepliesList() {
           },
           { title: "prompt", dataIndex: "prompt_name", width: 90 },
           {
-            title: "favorite",
+            title: "retenue",
             dataIndex: "is_favorite",
             width: 90,
             render: (v: boolean) =>
-              v ? <Tag color="gold">favorite</Tag> : "—",
+              v ? <Tag color="success">retenue</Tag> : "—",
           },
           {
             title: "aperçu",
@@ -83,18 +97,18 @@ export function RepliesList() {
             title: "créé",
             dataIndex: "created_at",
             width: 160,
-            render: (v: string) => new Date(v).toLocaleString("fr-FR"),
+            render: (v: string) => fmtDateTime(v),
           },
           {
             title: "",
-            width: 80,
+            width: 110,
             render: (_: unknown, r: ReplyListItem) => (
               <Popconfirm
                 title="Supprimer cette réponse ?"
                 onConfirm={() => del(r.id)}
               >
                 <Button size="small" danger>
-                  Suppr.
+                  Supprimer
                 </Button>
               </Popconfirm>
             ),

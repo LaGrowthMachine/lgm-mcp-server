@@ -12,6 +12,8 @@ import {
 } from "antd";
 import { useNavigate } from "react-router-dom";
 import { http, DiscoverResp } from "../api";
+import { PageHeader } from "../components/PageHeader";
+import { MONO_STACK } from "../theme";
 
 export function Discover() {
   const { message } = App.useApp();
@@ -39,30 +41,30 @@ export function Discover() {
     }
   };
 
-  const sendToAnalyze = () => {
+  const sendToBatch = () => {
     if (!resp?.ids.length) return;
     sessionStorage.setItem("eval.ids", resp.ids.join(", "));
-    navigate("/analyze");
+    navigate("/batches");
   };
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <div>
-        <Typography.Title level={3} style={{ marginTop: 0 }}>
-          Trouver des conversations
-        </Typography.Title>
-        <Typography.Paragraph type="secondary">
-          Colle un CSV LGM (colonne <code>company_id</code>) ou des userId
-          24-hex. On renvoie les conversations les plus récentes par société.
-        </Typography.Paragraph>
-      </div>
+      <PageHeader
+        title="Trouver des conversations"
+        description={
+          <>
+            Colle un CSV LGM (colonne <code>company_id</code>) ou des userId
+            24-hex. On renvoie les conversations les plus récentes par société.
+          </>
+        }
+      />
 
       <Input.TextArea
         rows={6}
         value={input}
         onChange={(e) => setInput(e.target.value)}
         placeholder="CSV LGM, ou userId séparés par virgules / sauts de ligne"
-        style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
+        style={{ fontFamily: MONO_STACK, fontSize: 13 }}
       />
 
       <Space size="large" wrap>
@@ -102,9 +104,9 @@ export function Discover() {
             <Button
               type="primary"
               disabled={!resp.ids.length}
-              onClick={sendToAnalyze}
+              onClick={sendToBatch}
             >
-              Envoyer vers Analyse →
+              Envoyer vers Batchs →
             </Button>
           </Space>
           <Table
@@ -119,7 +121,7 @@ export function Discover() {
                 dataIndex: "ids",
                 render: (ids: string[]) => (
                   <Typography.Text
-                    style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}
+                    style={{ fontFamily: MONO_STACK, fontSize: 12 }}
                   >
                     {ids.length ? ids.join(", ") : "—"}
                   </Typography.Text>

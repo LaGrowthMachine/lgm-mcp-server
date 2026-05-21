@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   Button,
-  Card,
   Form,
   Input,
   InputNumber,
@@ -18,12 +17,17 @@ import {
   EditOutlined,
   DeleteOutlined,
   StarFilled,
+  ThunderboltOutlined,
 } from "@ant-design/icons";
 import { http, Model, DefaultModelResp } from "../api";
+import { LGM_COLORS } from "../theme";
+import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/EmptyState";
+import { fmtPriceMtok } from "../format";
 
 // Registre CRUD des modèles d'inférence Bedrock. Le préfixe du model_id
 // (eu.anthropic.*, meta.*, mistral.*…) identifie le provider — pas besoin
-// d'un champ séparé. Le défaut est géré sur la page Settings.
+// d'un champ séparé. Le défaut est géré sur la page Réglages.
 
 interface ModelFormValues {
   label: string;
@@ -32,15 +36,6 @@ interface ModelFormValues {
   priceInputPerMtok: number | null | undefined;
   priceOutputPerMtok: number | null | undefined;
 }
-
-// Prix tableau : NULL ⇒ "—", sinon "$X" / Mtok avec 2-3 décimales selon la
-// magnitude. On reste en USD par Mtok = unité native des grilles Bedrock.
-const fmtPriceMtok = (n: number | null): string => {
-  if (n === null || n === undefined) return "—";
-  if (n === 0) return "$0";
-  if (n < 0.1) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(2)}`;
-};
 
 export function Models() {
   const [models, setModels] = useState<Model[]>([]);
@@ -139,15 +134,12 @@ export function Models() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Typography.Title level={3} style={{ marginTop: 0 }}>
-        Modèles
-      </Typography.Title>
-
-      <Card
-        title="Registre des modèles d'inférence"
-        extra={
-          <Space>
-            <Button size="small" onClick={() => setIncludeArchived((v) => !v)}>
+      <PageHeader
+        title="Modèles"
+        description="Registre des modèles d'inférence Bedrock disponibles, avec prix au million de tokens. Le défaut se définit dans Réglages."
+        actions={
+          <>
+            <Button onClick={() => setIncludeArchived((v) => !v)}>
               {includeArchived ? "Masquer archivés" : "Voir archivés"}
             </Button>
             <Button
@@ -157,16 +149,35 @@ export function Models() {
             >
               Ajouter
             </Button>
-          </Space>
+          </>
         }
-      >
-        <Table<Model>
-          dataSource={models}
-          rowKey="id"
-          loading={loading}
-          pagination={false}
-          size="small"
-          columns={[
+      />
+
+      <Table<Model>
+        dataSource={models}
+        rowKey="id"
+        loading={loading}
+        pagination={false}
+        size="middle"
+        locale={{
+          emptyText: (
+            <EmptyState
+              icon={<ThunderboltOutlined />}
+              title="Aucun modèle"
+              hint="Ajoute un premier modèle pour pouvoir lancer des analyses."
+              action={
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={openCreate}
+                >
+                  Ajouter
+                </Button>
+              }
+            />
+          ),
+        }}
+        columns={[
             {
               title: "Label",
               dataIndex: "label",
@@ -189,7 +200,11 @@ export function Models() {
               width: 150,
               align: "right",
               render: (v: number | null) => (
-                <span style={{ color: v === null ? "#999" : undefined }}>
+                <span
+                  style={{
+                    color: v === null ? LGM_COLORS.textTertiary : undefined,
+                  }}
+                >
                   {fmtPriceMtok(v)}
                 </span>
               ),
@@ -200,7 +215,11 @@ export function Models() {
               width: 150,
               align: "right",
               render: (v: number | null) => (
-                <span style={{ color: v === null ? "#999" : undefined }}>
+                <span
+                  style={{
+                    color: v === null ? LGM_COLORS.textTertiary : undefined,
+                  }}
+                >
                   {fmtPriceMtok(v)}
                 </span>
               ),
@@ -247,7 +266,6 @@ export function Models() {
             },
           ]}
         />
-      </Card>
 
       <Modal
         title={editing ? "Éditer le modèle" : "Ajouter un modèle"}

@@ -28,6 +28,10 @@ import {
   TranscriptItem,
 } from "../api";
 import { diffLines, DiffLine } from "../lineDiff";
+import { LGM_COLORS, MONO_STACK } from "../theme";
+import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/EmptyState";
+import { fmtDateTime, fmtCost } from "../format";
 
 // "2023-05-24 14:32" (epoch ms) → libellé court fr. "" si inconnu.
 const fmtWhen = (at: number): string =>
@@ -70,9 +74,9 @@ function Bubble({
       <div
         style={{
           maxWidth: "78%",
-          background: isSender ? "#e6f4ea" : "#f3f4f6",
-          border: `1px solid ${isSender ? "#bfe3cd" : "#e5e7eb"}`,
-          color: "#1f2328",
+          background: isSender ? LGM_COLORS.greenTint : LGM_COLORS.surfaceSubtle,
+          border: `1px solid ${isSender ? LGM_COLORS.greenTintStrong : LGM_COLORS.border}`,
+          color: LGM_COLORS.textBase,
           padding: "8px 12px",
           borderRadius: 12,
           borderBottomRightRadius: right ? 3 : 12,
@@ -195,25 +199,29 @@ function AnalysisDiff({
         margin: 0,
         fontSize: 12,
         lineHeight: "18px",
-        fontFamily: "ui-monospace, monospace",
+        fontFamily: MONO_STACK,
         maxHeight: 420,
         overflow: "auto",
         borderRadius: 6,
-        border: "1px solid #eee",
+        border: `1px solid ${LGM_COLORS.borderSubtle}`,
       }}
     >
       {lines.map((l, i) => {
         const bg =
-          l.t === "add" ? "#e6ffec" : l.t === "del" ? "#ffebe9" : "transparent";
+          l.t === "add"
+            ? LGM_COLORS.greenTintStrong
+            : l.t === "del"
+              ? LGM_COLORS.coralTint
+              : "transparent";
         const sign = l.t === "add" ? "+" : l.t === "del" ? "−" : " ";
         const color =
           l.t === "add"
-            ? "#04260f"
+            ? LGM_COLORS.greenActive
             : l.t === "del"
-              ? "#5c1a17"
+              ? LGM_COLORS.coralHover
               : dim
-                ? "#8a8f98"
-                : "#1f2328";
+                ? LGM_COLORS.textTertiary
+                : LGM_COLORS.textBase;
         return (
           <div
             key={i}
@@ -365,41 +373,54 @@ export function ConversationDetail() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Space>
-        <Button
-          icon={<ArrowLeftOutlined />}
-          onClick={() => navigate("/conversations")}
-        >
-          Conversations
-        </Button>
-        <Button
-          icon={
-            data.is_favorite ? (
-              <StarFilled style={{ color: "#f0a500" }} />
-            ) : (
-              <StarOutlined />
-            )
-          }
-          onClick={toggleFav}
-        >
-          {data.is_favorite ? "Favori" : "Marquer favori"}
-        </Button>
-        <Button
-          type="primary"
-          icon={<SendOutlined />}
-          loading={generating}
-          onClick={genReply}
-        >
-          Générer une réponse (prompt actif)
-        </Button>
-        <Popconfirm title="Supprimer cette conversation ?" onConfirm={delConv}>
-          <Button danger>Supprimer la conversation</Button>
-        </Popconfirm>
-      </Space>
-
-      <Typography.Title level={4} style={{ margin: 0 }}>
-        <code>{data.conversation_id}</code>
-      </Typography.Title>
+      <PageHeader
+        breadcrumb={
+          <Button
+            type="link"
+            size="small"
+            icon={<ArrowLeftOutlined />}
+            onClick={() => navigate("/conversations")}
+            style={{ padding: 0 }}
+          >
+            Conversations
+          </Button>
+        }
+        title={
+          <span style={{ fontFamily: MONO_STACK, fontSize: 18 }}>
+            {data.conversation_id}
+          </span>
+        }
+        actions={
+          <>
+            <Button
+              icon={
+                data.is_favorite ? (
+                  <StarFilled style={{ color: LGM_COLORS.warning }} />
+                ) : (
+                  <StarOutlined />
+                )
+              }
+              onClick={toggleFav}
+            >
+              {data.is_favorite ? "Favorite" : "Marquer favorite"}
+            </Button>
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              loading={generating}
+              onClick={genReply}
+            >
+              Générer une réponse
+            </Button>
+            <Popconfirm
+              title="Supprimer cette conversation ?"
+              onConfirm={delConv}
+            >
+              <Button danger>Supprimer</Button>
+            </Popconfirm>
+          </>
+        }
+      />
 
       <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
         <div
@@ -418,13 +439,13 @@ export function ConversationDetail() {
           {favorite && (
             <Card
               size="small"
-              style={{ borderColor: "#1f9d57" }}
+              style={{ borderColor: LGM_COLORS.green }}
               title={
                 <Space>
-                  <Tag color="gold">RÉPONSE RETENUE</Tag>
+                  <Tag color="success">RETENUE</Tag>
                   <span>prompt {favorite.prompt_name}</span>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {new Date(favorite.created_at).toLocaleString("fr-FR")}
+                    {fmtDateTime(favorite.created_at)}
                   </Typography.Text>
                 </Space>
               }
@@ -452,14 +473,14 @@ export function ConversationDetail() {
               size="small"
               style={{
                 marginBottom: 12,
-                borderColor: r.is_favorite ? "#1f9d57" : undefined,
+                borderColor: r.is_favorite ? LGM_COLORS.green : undefined,
               }}
               title={
                 <Space>
-                  {r.is_favorite && <Tag color="gold">FAVORITE</Tag>}
+                  {r.is_favorite && <Tag color="success">RETENUE</Tag>}
                   <span>prompt {r.prompt_name}</span>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {new Date(r.created_at).toLocaleString("fr-FR")}
+                    {fmtDateTime(r.created_at)}
                   </Typography.Text>
                 </Space>
               }
@@ -470,7 +491,7 @@ export function ConversationDetail() {
                     type={r.is_favorite ? "default" : "primary"}
                     onClick={() => toggleReplyFav(r.id, !r.is_favorite)}
                   >
-                    {r.is_favorite ? "Retirer favorite" : "Favoriter"}
+                    {r.is_favorite ? "Retirer (retenue)" : "Marquer retenue"}
                   </Button>
                   <Popconfirm
                     title="Supprimer cette réponse ?"
@@ -489,10 +510,11 @@ export function ConversationDetail() {
             </Card>
           ))}
           {data.replies.length === 0 && (
-            <Typography.Text type="secondary">
-              Aucune réponse générée. « Générer une réponse » utilise le prompt
-              réponse actif.
-            </Typography.Text>
+            <EmptyState
+              icon={<SendOutlined />}
+              title="Aucune réponse"
+              hint="« Générer une réponse » utilise le prompt réponse actif."
+            />
           )}
 
           <Divider />
@@ -533,9 +555,7 @@ export function ConversationDetail() {
               const older = data.analyses[idx + 1];
               if (older) {
                 baseDiff = analysisDiffJson(older);
-                refLabel = `vs version précédente · ${new Date(
-                  older.created_at,
-                ).toLocaleString("fr-FR")}`;
+                refLabel = `vs version précédente · ${fmtDateTime(older.created_at)}`;
               }
             }
             const lines: DiffLine[] =
@@ -550,7 +570,7 @@ export function ConversationDetail() {
                 size="small"
                 style={{
                   marginBottom: 12,
-                  borderColor: a.is_canon ? "#1f9d57" : undefined,
+                  borderColor: a.is_canon ? LGM_COLORS.green : undefined,
                 }}
                 title={
                   // 2 niveaux d'info : top = identité (prompt + statuts +
@@ -589,23 +609,18 @@ export function ConversationDetail() {
                       wrap
                       size={8}
                       split={
-                        <span style={{ color: "#d9d9d9" }}>·</span>
+                        <span style={{ color: LGM_COLORS.border }}>·</span>
                       }
                       style={{
                         fontSize: 12,
-                        color: "#8c8c8c",
+                        color: LGM_COLORS.textSecondary,
                         fontWeight: 400,
                       }}
                     >
                       <span>{a.model_label ?? "—"}</span>
-                      <span>
-                        {new Date(a.created_at).toLocaleString("fr-FR")}
-                      </span>
+                      <span>{fmtDateTime(a.created_at)}</span>
                       {a.edited_at && (
-                        <span>
-                          édité{" "}
-                          {new Date(a.edited_at).toLocaleString("fr-FR")}
-                        </span>
+                        <span>édité {fmtDateTime(a.edited_at)}</span>
                       )}
                       {/* Tokens + coût USD de cette inférence. NULL ⇒ analyse
                           legacy ou status='skipped' (pas d'appel) ⇒ on
@@ -618,12 +633,8 @@ export function ConversationDetail() {
                           {a.cost_usd !== null && (
                             <>
                               {" — "}
-                              <strong style={{ color: "#1d39c4" }}>
-                                {a.cost_usd < 0.01
-                                  ? `$${a.cost_usd.toFixed(4)}`
-                                  : a.cost_usd < 1
-                                    ? `$${a.cost_usd.toFixed(3)}`
-                                    : `$${a.cost_usd.toFixed(2)}`}
+                              <strong style={{ color: LGM_COLORS.green }}>
+                                {fmtCost(a.cost_usd)}
                               </strong>
                             </>
                           )}
@@ -676,9 +687,10 @@ export function ConversationDetail() {
             );
           })}
           {data.analyses.length === 0 && (
-            <Typography.Text type="secondary">
-              Aucune analyse pour cette conversation.
-            </Typography.Text>
+            <EmptyState
+              title="Aucune analyse"
+              hint="Lance un batch (ou une analyse depuis le tool MCP) pour comparer la classification au canon."
+            />
           )}
         </div>
       </div>
@@ -697,7 +709,7 @@ export function ConversationDetail() {
           value={editBody}
           onChange={(e) => setEditBody(e.target.value)}
           autoSize={{ minRows: 16, maxRows: 30 }}
-          style={{ fontFamily: "ui-monospace, monospace", fontSize: 12.5 }}
+          style={{ fontFamily: MONO_STACK, fontSize: 12.5 }}
         />
       </Modal>
     </Space>

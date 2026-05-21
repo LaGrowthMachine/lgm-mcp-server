@@ -6,12 +6,11 @@ import {
   Table,
   Button,
   Progress,
-  Statistic,
   Popconfirm,
   Tooltip,
   App,
 } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, ArrowLeftOutlined } from "@ant-design/icons";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   http,
@@ -20,38 +19,19 @@ import {
   BatchAnalysisItem,
   BatchVerdict,
 } from "../api";
+import { LGM_COLORS } from "../theme";
+import { PageHeader } from "../components/PageHeader";
+import { KpiStat } from "../components/KpiStat";
+import { fmtDateTime, fmtPct, fmtTokens, fmtCost } from "../format";
 
 const MAX_CONCURRENCY = 3;
 const POLL_MS = 3000;
 
-const fmtDateTime = (iso: string | null): string =>
-  iso ? new Date(iso).toLocaleString("fr-FR") : "—";
-
-const fmtPct = (n: number | null): string =>
-  n === null ? "—" : `${Math.round(n * 100)} %`;
-
-// 1234567 → "1.23 M", 12345 → "12.3 k", 123 → "123". NULL ⇒ "—".
-const fmtTokens = (n: number | null): string => {
-  if (n === null || n === undefined) return "—";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)} M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)} k`;
-  return String(n);
-};
-
-// Coût USD : 4 décimales sous 1 ¢, 3 sous 1 $, 2 au-delà. NULL ⇒ "—".
-const fmtCost = (n: number | null): string => {
-  if (n === null || n === undefined) return "—";
-  if (n === 0) return "$0";
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  if (n < 1) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(2)}`;
-};
-
 const baseVerdictTag = (v: BatchVerdict) => {
-  if (v === "pass") return <Tag color="green">pass ✓</Tag>;
-  if (v === "regression") return <Tag color="orange">regression</Tag>;
-  if (v === "error") return <Tag color="red">erreur</Tag>;
-  if (v === "skipped") return <Tag color="default">skipped</Tag>;
+  if (v === "pass") return <Tag color="success">pass ✓</Tag>;
+  if (v === "regression") return <Tag color="warning">régression</Tag>;
+  if (v === "error") return <Tag color="error">erreur</Tag>;
+  if (v === "skipped") return <Tag>ignoré</Tag>;
   return <Tag>pas de canon</Tag>;
 };
 
@@ -66,7 +46,11 @@ const verdictTag = (v: BatchVerdict, reason: string | null) => {
       <span style={{ cursor: "help" }}>
         {tag}
         <InfoCircleOutlined
-          style={{ marginLeft: 2, color: "#8c8c8c", fontSize: 12 }}
+          style={{
+            marginLeft: 2,
+            color: LGM_COLORS.textTertiary,
+            fontSize: 12,
+          }}
         />
       </span>
     </Tooltip>
@@ -77,19 +61,19 @@ const statusTag = (s: BatchRow["status"]) =>
   s === "running" ? (
     <Tag color="processing">en cours</Tag>
   ) : s === "done" ? (
-    <Tag color="green">terminé</Tag>
+    <Tag color="success">terminé</Tag>
   ) : (
     <Tag>arrêté</Tag>
   );
 
-// Couleurs de ligne tableau analyses : reflet visuel du verdict (vert pâle =
-// pass, orange = regression, rouge = error, gris pâle = skipped). Légères
-// pour rester lisibles.
+// Couleurs de ligne tableau analyses : reflet visuel du verdict via tokens
+// LGM (tint vert pour pass, tint corail pour error/regression, gris pour
+// skipped). Légères pour rester lisibles.
 const ROW_BG: Record<BatchVerdict, string> = {
-  pass: "#f6ffed",
-  regression: "#fff7e6",
-  error: "#fff1f0",
-  skipped: "#fafafa",
+  pass: LGM_COLORS.greenTint,
+  regression: "rgba(245,158,11,.06)",
+  error: LGM_COLORS.coralTint,
+  skipped: LGM_COLORS.surfaceSubtle,
   no_canon: "transparent",
 };
 
@@ -244,8 +228,10 @@ export function BatchDetail() {
   if (notFound)
     return (
       <Space direction="vertical">
-        <Typography.Title level={3}>Batch introuvable</Typography.Title>
-        <Link to="/batches">← Retour à la liste</Link>
+        <PageHeader
+          title="Batch introuvable"
+          breadcrumb={<Link to="/batches">← Batchs</Link>}
+        />
       </Space>
     );
   if (!detail)
@@ -261,12 +247,11 @@ export function BatchDetail() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
-        <div>
-          <Typography.Title level={3} style={{ marginTop: 0, marginBottom: 4 }}>
-            Batch — {fmtDateTime(batch.created_at)}
-          </Typography.Title>
-          <Space size="small" wrap>
+      <PageHeader
+        breadcrumb={<Link to="/batches">← Batchs</Link>}
+        title={`Batch · ${fmtDateTime(batch.created_at)}`}
+        description={
+          <Space size="small" wrap style={{ marginTop: 4 }}>
             {statusTag(batch.status)}
             <Tag>
               {batch.source === "favorites" ? "★ favorites" : "liste"}
@@ -281,26 +266,28 @@ export function BatchDetail() {
               {batch.input_count} conversation(s) ciblée(s)
             </Typography.Text>
           </Space>
-        </div>
-        <Space>
-          {isRunning && running && (
-            <Button danger onClick={stop}>
-              Arrêter
-            </Button>
-          )}
-          {isRunning && !running && (
-            <Popconfirm
-              title="Marquer ce batch comme arrêté ?"
-              onConfirm={markAborted}
-            >
-              <Button danger>Marquer arrêté</Button>
-            </Popconfirm>
-          )}
-          <Link to="/batches">
-            <Button>← Liste</Button>
-          </Link>
-        </Space>
-      </Space>
+        }
+        actions={
+          <>
+            {isRunning && running && (
+              <Button danger onClick={stop}>
+                Arrêter
+              </Button>
+            )}
+            {isRunning && !running && (
+              <Popconfirm
+                title="Marquer ce batch comme arrêté ?"
+                onConfirm={markAborted}
+              >
+                <Button danger>Marquer arrêté</Button>
+              </Popconfirm>
+            )}
+            <Link to="/batches">
+              <Button icon={<ArrowLeftOutlined />}>Liste</Button>
+            </Link>
+          </>
+        }
+      />
 
       {isRunning && (
         <Progress
@@ -329,8 +316,8 @@ export function BatchDetail() {
         const n_full = cmp.filter((r) => labelOk(r) && subOk(r)).length;
         const n_partial = cmp.filter((r) => labelOk(r) && !subOk(r)).length;
         const n_wrong = cmp.filter((r) => !labelOk(r)).length;
-        const OK = "#3f8600";
-        const KO = "#cf1322";
+        const OK = LGM_COLORS.greenActive;
+        const KO = LGM_COLORS.coralHover;
         type Bucket = {
           key: string;
           parts: { name: string; color: string }[];
@@ -357,9 +344,9 @@ export function BatchDetail() {
             ],
             n: n_partial,
             rate: denom > 0 ? n_partial / denom : null,
-            // Couleur "intermédiaire" du bucket sur les chiffres (orange) —
+            // Couleur "intermédiaire" du bucket sur les chiffres (warning) —
             // les couleurs OK/KO restent réservées au statut par terme.
-            rowColor: "#d48806",
+            rowColor: LGM_COLORS.warning,
           },
           {
             key: "wrong",
@@ -387,7 +374,12 @@ export function BatchDetail() {
                       {row.parts.map((p, i) => (
                         <span key={p.name}>
                           {i > 0 && (
-                            <span style={{ color: "#999", margin: "0 6px" }}>
+                            <span
+                              style={{
+                                color: LGM_COLORS.textTertiary,
+                                margin: "0 6px",
+                              }}
+                            >
                               +
                             </span>
                           )}
@@ -419,26 +411,24 @@ export function BatchDetail() {
                 },
               ]}
             />
-            <Space size="large" wrap>
-              <Statistic
-                title="Pas de canon"
+            <Space size="large" wrap align="start">
+              <KpiStat
+                label="Pas de canon"
                 value={metrics.n_no_canon}
-                valueStyle={{ color: "#999" }}
+                tone="muted"
               />
-              <Statistic
-                title="Skipped"
+              <KpiStat
+                label="Ignorées"
                 value={metrics.n_skipped}
-                valueStyle={{ color: "#999" }}
+                tone="muted"
               />
-              <Statistic
-                title="Erreurs"
+              <KpiStat
+                label="Erreurs"
                 value={metrics.n_error}
-                valueStyle={{
-                  color: metrics.n_error > 0 ? "#cf1322" : undefined,
-                }}
+                tone={metrics.n_error > 0 ? "danger" : "default"}
               />
-              <Statistic
-                title="Analyses"
+              <KpiStat
+                label="Analyses"
                 value={`${metrics.n_total} / ${batch.input_count}`}
               />
               {/* Tokens — input/output, "in" et "out" en suffixe pour signifier
@@ -451,25 +441,25 @@ export function BatchDetail() {
                     : ""
                 }
               >
-                <Statistic
-                  title="Tokens"
+                <KpiStat
+                  label="Tokens"
                   value={
                     metrics.n_input_tokens === null &&
-                    metrics.n_output_tokens === null
-                      ? "—"
-                      : `${fmtTokens(metrics.n_input_tokens)} in · ${fmtTokens(
-                          metrics.n_output_tokens,
-                        )} out`
+                    metrics.n_output_tokens === null ? (
+                      "—"
+                    ) : (
+                      <span style={{ fontSize: 16 }}>
+                        {fmtTokens(metrics.n_input_tokens)} in ·{" "}
+                        {fmtTokens(metrics.n_output_tokens)} out
+                      </span>
+                    )
                   }
-                  valueStyle={{ color: "#666", fontSize: 16 }}
                 />
               </Tooltip>
-              <Statistic
-                title="Coût"
+              <KpiStat
+                label="Coût"
                 value={fmtCost(metrics.cost_usd)}
-                valueStyle={{
-                  color: metrics.cost_usd === null ? "#999" : "#1d39c4",
-                }}
+                tone={metrics.cost_usd === null ? "muted" : "primary"}
               />
             </Space>
           </Space>
