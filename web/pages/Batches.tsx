@@ -12,6 +12,7 @@ import type { TablePaginationConfig } from "antd";
 import { Link, useNavigate } from "react-router-dom";
 import { http, BatchRow, BatchListItem, BatchListResp } from "../api";
 import { PromptSelect } from "../PromptSelect";
+import { ModelSelect } from "../ModelSelect";
 
 const HEX24 = /^[a-f0-9]{24}$/i;
 const parseIds = (raw: string): string[] => [
@@ -45,6 +46,7 @@ export function Batches() {
     () => sessionStorage.getItem("eval.ids") ?? "",
   );
   const [promptSel, setPromptSel] = useState<string>("");
+  const [modelSel, setModelSel] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
 
   const [rows, setRows] = useState<BatchListItem[]>([]);
@@ -83,6 +85,7 @@ export function Batches() {
     try {
       const body: Record<string, unknown> = { source };
       if (promptSel) body.promptName = promptSel;
+      if (modelSel) body.modelId = modelSel;
       if (source === "ids") {
         const list = parseIds(ids);
         if (list.length === 0) {
@@ -129,6 +132,11 @@ export function Batches() {
         <PromptSelect
           value={promptSel}
           onChange={setPromptSel}
+          disabled={submitting}
+        />
+        <ModelSelect
+          value={modelSel}
+          onChange={setModelSel}
           disabled={submitting}
         />
         <Button
@@ -178,6 +186,12 @@ export function Batches() {
             width: 140,
             render: (v: string | null) =>
               v ? <code>{v}</code> : <Tag color="blue">live</Tag>,
+          },
+          {
+            title: "modèle",
+            dataIndex: "model_label",
+            width: 160,
+            render: (v: string | null) => v ?? "—",
           },
           {
             title: "#conv",

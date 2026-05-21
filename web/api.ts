@@ -74,6 +74,9 @@ export interface AnalysisRow {
     conversation: TranscriptItem[];
     analysis: Record<string, unknown>;
   };
+  model_id: string | null;
+  model_label: string | null;
+  model_aws_id: string | null;
 }
 
 export interface ReplyRowApi {
@@ -149,6 +152,9 @@ export interface BatchRow {
   source: BatchSource;
   input_count: number;
   source_ids: string[];
+  model_id: string | null;
+  model_label: string | null;
+  model_aws_id: string | null;
 }
 
 export interface BatchListItem {
@@ -165,6 +171,7 @@ export interface BatchListItem {
   n_no_canon: number;
   n_skipped: number;
   n_error: number;
+  model_label: string | null;
 }
 
 export interface BatchAnalysisItem {
@@ -213,4 +220,19 @@ export interface BatchDetailResp {
   batch: BatchRow;
   rows: BatchAnalysisItem[];
   metrics: BatchMetrics;
+}
+
+// ---------- registre des modèles + settings ----------
+export interface Model {
+  id: string;
+  label: string;
+  aws_model_id: string;
+  is_archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DefaultModelResp {
+  modelId: string | null;
+  model: Model | null;
 }

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import { EJSON } from "bson";
 import {
   buildDbExplorerSystemPrompt,
@@ -10,13 +10,13 @@ import {
 import { validate, ValidationError } from "./validator";
 import { runValidatedQuery, type RunQueryError, type RunQueryResult } from "./interpreter";
 import { getDb } from "./mongoClient";
+import { callWithRetry, __resetForTests as __resetInferenceClient } from "../../inference/client";
+import { resolveEffectiveModelId } from "../../eval/db";
 
-const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 4_096;
 const MAX_ITERATIONS = 12;
 const MAX_TOOL_USES_PER_ITERATION = 8;
 const CONTEXT_TOKEN_CAP = 150_000;
-const RETRY_BACKOFF_MS = 2_000;
 const QUERY_PREVIEW_MAX = 80;
 const AGENT_WALL_CLOCK_MS = 180_000;
 
@@ -61,38 +61,6 @@ const logLine = (parts: Record<string, unknown>): void => {
     })
     .join(" ");
   console.error(`[explore_db] ${payload}`);
-};
-
-let client: Anthropic | null = null;
-
-const getClient = (): Anthropic => {
-  if (!client) {
-    const apiKey = process.env.REPLY_MANAGER_API_KEY;
-    if (!apiKey) throw new Error("REPLY_MANAGER_API_KEY env var is not set");
-    client = new Anthropic({ apiKey });
-  }
-  return client;
-};
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-const callAnthropicWithRetry = async (
-  req: Anthropic.MessageCreateParamsNonStreaming,
-): Promise<Anthropic.Message> => {
-  try {
-    return await getClient().messages.create(req);
-  } catch (err) {
-    const status = (err as { status?: number } | null)?.status;
-    if (status === 429 || status === 529) {
-      await sleep(RETRY_BACKOFF_MS);
-      try {
-        return await getClient().messages.create(req);
-      } catch {
-        throw new Error("Inference rate-limited, retry shortly.");
-      }
-    }
-    throw err;
-  }
 };
 
 // Mask hex ObjectIds, email-like patterns, and bare digit runs (phones, ids).
@@ -170,6 +138,7 @@ const runAgentLoop = async (
   reqId: string,
   t0: number,
   brief: string,
+  model: string,
 ): Promise<ExploreDbResult> => {
   const system = buildDbExplorerSystemPrompt();
   const queries: QueryRecord[] = [];
@@ -185,8 +154,8 @@ const runAgentLoop = async (
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     loopIterations++;
-    const resp = await callAnthropicWithRetry({
-      model: MODEL,
+    const resp = await callWithRetry({
+      model,
       max_tokens: MAX_TOKENS,
       system,
       tools: [
@@ -322,6 +291,7 @@ export const runDbExplorerAgent = async (
 ): Promise<ExploreDbResult> => {
   const reqId = newReqId();
   const t0 = Date.now();
+  const { awsModelId: model } = await resolveEffectiveModelId();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
@@ -330,7 +300,7 @@ export const runDbExplorerAgent = async (
     );
   });
   try {
-    return await Promise.race([runAgentLoop(reqId, t0, brief), timeout]);
+    return await Promise.race([runAgentLoop(reqId, t0, brief, model), timeout]);
   } catch (err) {
     logLine({
       reqId,
@@ -345,5 +315,5 @@ export const runDbExplorerAgent = async (
 };
 
 export const __resetClientForTests = (): void => {
-  client = null;
+  __resetInferenceClient();
 };

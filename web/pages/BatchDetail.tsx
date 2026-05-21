@@ -138,6 +138,7 @@ export function BatchDetail() {
                 ...(batch.prompt_name
                   ? { promptName: batch.prompt_name }
                   : {}),
+                ...(batch.model_id ? { modelId: batch.model_id } : {}),
               },
               { signal: ctrl.signal },
             );
@@ -255,6 +256,9 @@ export function BatchDetail() {
             </Tag>
             <Tag color={batch.prompt_name ? "default" : "blue"}>
               prompt : {batch.prompt_name ?? "live"}
+            </Tag>
+            <Tag color={batch.model_label ? "purple" : "default"}>
+              modèle : {batch.model_label ?? "—"}
             </Tag>
             <Typography.Text type="secondary">
               {batch.input_count} conversation(s) ciblée(s)

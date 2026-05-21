@@ -6,6 +6,8 @@ import {
   MessageOutlined,
   ProfileOutlined,
   FileTextOutlined,
+  SettingOutlined,
+  ApiOutlined,
 } from "@ant-design/icons";
 import {
   Routes,
@@ -22,28 +24,20 @@ import { Conversations } from "./pages/Conversations";
 import { RepliesList } from "./pages/RepliesList";
 import { ConversationDetail } from "./pages/ConversationDetail";
 import { Prompts } from "./pages/Prompts";
+import { Models } from "./pages/Models";
+import { Settings } from "./pages/Settings";
 
 const { Header, Sider, Content } = Layout;
 
 const NAV = [
-  {
-    key: "/discover",
-    icon: <SearchOutlined />,
-    label: "Trouver des conversations",
-  },
-  {
-    key: "/batches",
-    icon: <ExperimentOutlined />,
-    label: "Analyses en batch",
-  },
-  { key: "/generate", icon: <SendOutlined />, label: "Générer des réponses" },
-  {
-    key: "/conversations",
-    icon: <MessageOutlined />,
-    label: "Liste conversations",
-  },
-  { key: "/replies", icon: <ProfileOutlined />, label: "Liste réponses" },
+  { key: "/discover", icon: <SearchOutlined />, label: "Trouver" },
+  { key: "/batches", icon: <ExperimentOutlined />, label: "Batchs" },
+  { key: "/generate", icon: <SendOutlined />, label: "Générer" },
+  { key: "/conversations", icon: <MessageOutlined />, label: "Conversations" },
+  { key: "/replies", icon: <ProfileOutlined />, label: "Réponses" },
   { key: "/prompts", icon: <FileTextOutlined />, label: "Prompts" },
+  { key: "/models", icon: <ApiOutlined />, label: "Modèles" },
+  { key: "/settings", icon: <SettingOutlined />, label: "Settings" },
 ];
 
 export function Shell() {
@@ -121,6 +115,8 @@ export function Shell() {
               />
               <Route path="/replies" element={<RepliesList />} />
               <Route path="/prompts" element={<Prompts />} />
+              <Route path="/models" element={<Models />} />
+              <Route path="/settings" element={<Settings />} />
             </Routes>
           </div>
         </Content>

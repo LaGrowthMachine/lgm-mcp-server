@@ -5,6 +5,7 @@ import { callFlow, McpFlowError } from "./callFlow";
 import { trackMcpEvent } from "./tracking";
 import { getApiKey } from "./requestContext";
 import { analyzeConversationWithDbPrompt } from "./eval/analyzer";
+import { resolveEffectiveModelId } from "./eval/db";
 import { assertLgmStaff } from "./agents/db-explorer/acl";
 import { runDbExplorerAgent } from "./agents/db-explorer/agentLoop";
 import { DB_EXPLORER_PROMPT_VERSION } from "./agents/db-explorer/prompt";
@@ -429,8 +430,10 @@ export const registerTools = (server: McpServer) => {
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
       try {
+        const resolved = await resolveEffectiveModelId();
         const result = await analyzeConversationWithDbPrompt(
           params.conversationId,
+          { model: resolved.awsModelId },
         );
 
         if (result.analysis.status === "ok") {

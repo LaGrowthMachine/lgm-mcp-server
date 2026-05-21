@@ -2,14 +2,21 @@ import { __resetClientForTests, maskSensitive, runDbExplorerAgent } from "./agen
 
 const messagesCreate = jest.fn();
 
-jest.mock("@anthropic-ai/sdk", () => {
-  return {
-    __esModule: true,
-    default: jest.fn().mockImplementation(() => ({
-      messages: { create: messagesCreate },
-    })),
-  };
-});
+jest.mock("@anthropic-ai/bedrock-sdk", () => ({
+  __esModule: true,
+  default: jest.fn().mockImplementation(() => ({
+    messages: { create: messagesCreate },
+  })),
+}));
+
+// Bypass Postgres resolution dans les tests : on injecte un model fictif au
+// début de la boucle au lieu d'aller chercher en DB le default settings.
+jest.mock("../../eval/db", () => ({
+  resolveEffectiveModelId: jest.fn().mockResolvedValue({
+    uuid: "00000000-0000-0000-0000-000000000001",
+    awsModelId: "anthropic.claude-haiku-4-5",
+  }),
+}));
 
 jest.mock("./mongoClient", () => ({
   getDb: jest.fn().mockResolvedValue({
@@ -54,7 +61,9 @@ const toolUse = (id: string, expr: string) => ({
 beforeEach(() => {
   __resetClientForTests();
   messagesCreate.mockReset();
-  process.env.REPLY_MANAGER_API_KEY = "test-key";
+  process.env.REPLY_MANAGER_BEDROCK_TOKEN = "test-token";
+  process.env.REPLY_MANAGER_BEDROCK_BASE_URL = "https://example/v1";
+  process.env.REPLY_MANAGER_BEDROCK_REGION = "eu-north-1";
   jest.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
@@ -79,6 +88,12 @@ describe("agentLoop", () => {
     expect(result.telemetry.queryCount).toBe(1);
     expect(result.telemetry.failedQueries).toBe(0);
     expect(result.telemetry.loopIterations).toBe(2);
+    // Garde la propagation effective du model résolu vers Bedrock : si demain
+    // quelqu'un casse le chaînage resolveEffectiveModelId → callWithRetry,
+    // les autres tests passent toujours.
+    expect(messagesCreate.mock.calls[0][0].model).toBe(
+      "anthropic.claude-haiku-4-5",
+    );
   });
 
   it("invalid query → reformulated → success", async () => {

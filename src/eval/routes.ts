@@ -42,6 +42,14 @@ const wrap =
   (fn: (req: express.Request, res: express.Response) => Promise<void>) =>
   (req: express.Request, res: express.Response): void => {
     fn(req, res).catch((e) => {
+      // ModelNotConfiguredError = action user requise (aller dans /eval/settings),
+      // pas une 500. L'UI peut détecter via le code pour proposer la redirection.
+      if (e instanceof db.ModelNotConfiguredError) {
+        res
+          .status(409)
+          .json({ error: e.message, code: "MODEL_NOT_CONFIGURED" });
+        return;
+      }
       console.error("[api] error", e);
       res
         .status(500)
@@ -109,7 +117,18 @@ evalRouter.post(
       res.status(400).json({ error: "batchId invalide" });
       return;
     }
-    const result = await analyzeConversationWithDbPrompt(id, promptName);
+    const modelIdParam = req.body?.modelId
+      ? String(req.body.modelId)
+      : undefined;
+    if (modelIdParam !== undefined && !UUID_RE.test(modelIdParam)) {
+      res.status(400).json({ error: "modelId invalide" });
+      return;
+    }
+    const resolved = await db.resolveEffectiveModelId(modelIdParam);
+    const result = await analyzeConversationWithDbPrompt(id, {
+      model: resolved.awsModelId,
+      promptName,
+    });
     await db.upsertConversation(id, result.conversation);
     const payload = {
       conversation: result.conversation,
@@ -121,6 +140,7 @@ evalRouter.post(
       status: result.analysis.status,
       payload,
       batchId,
+      modelId: resolved.uuid,
     });
 
     // Comparaison déterministe au canon courant (si présent).
@@ -161,6 +181,18 @@ evalRouter.post(
       : null;
     const source: db.BatchSource =
       req.body?.source === "favorites" ? "favorites" : "ids";
+    const modelIdParam = req.body?.modelId
+      ? String(req.body.modelId)
+      : undefined;
+    if (modelIdParam !== undefined && !UUID_RE.test(modelIdParam)) {
+      res.status(400).json({ error: "modelId invalide" });
+      return;
+    }
+    // Résolution stricte au moment de la création du batch : on fige le
+    // modèle qui sera utilisé pour toutes les analyses du batch. Si la
+    // résolution échoue (pas de default settings, pas de modelId explicite),
+    // le batch n'est pas créé.
+    const resolved = await db.resolveEffectiveModelId(modelIdParam);
     let ids: string[];
     if (source === "favorites") {
       ids = await db.favoriteConversationIds();
@@ -180,6 +212,7 @@ evalRouter.post(
       promptName,
       source,
       sourceIds: ids,
+      modelId: resolved.uuid,
     });
     res.json(batch);
   }),
@@ -380,7 +413,11 @@ evalRouter.post(
     const promptName = req.body?.promptName
       ? String(req.body.promptName)
       : undefined;
-    const gen = await generateReply(id, promptName);
+    const resolved = await db.resolveEffectiveModelId();
+    const gen = await generateReply(id, {
+      model: resolved.awsModelId,
+      promptName,
+    });
     await db.upsertConversation(id, gen.conversation);
 
     if (gen.result.status === "skipped") {
@@ -617,3 +654,136 @@ evalRouter.post(
 );
 
 // (Clone géré côté client : GET du body source + POST /prompts.)
+
+// ---------- 6 · Registre des modèles + settings globaux ----------
+// CRUD modèles d'inférence Bedrock. Le préfixe du model_id identifie le
+// provider (eu.anthropic.*, meta.*, mistral.*…), pas besoin de le stocker
+// à part. Soft delete via is_archived — préserve les FK historiques sur
+// analyses/batches.
+evalRouter.get(
+  "/models",
+  wrap(async (req, res) => {
+    const includeArchived = req.query.archived === "1";
+    res.json(await db.listModels(includeArchived));
+  }),
+);
+
+evalRouter.post(
+  "/models",
+  wrap(async (req, res) => {
+    const label = String(req.body?.label ?? "").trim();
+    const modelId = String(req.body?.modelId ?? "").trim();
+    if (!label || !modelId) {
+      res.status(400).json({ error: "label et modelId sont requis" });
+      return;
+    }
+    try {
+      const m = await db.createModel({ label, modelId });
+      res.json(m);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/duplicate|unique/i.test(msg)) {
+        res.status(409).json({ error: "label ou modelId déjà existant" });
+        return;
+      }
+      throw e;
+    }
+  }),
+);
+
+evalRouter.put(
+  "/models/:id",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "id invalide" });
+      return;
+    }
+    const label =
+      req.body?.label !== undefined ? String(req.body.label).trim() : undefined;
+    if (label !== undefined && label.length === 0) {
+      res.status(400).json({ error: "label ne peut pas être vide" });
+      return;
+    }
+    try {
+      const m = await db.updateModel(id, { label });
+      if (!m) {
+        res.status(404).json({ error: "modèle inconnu" });
+        return;
+      }
+      res.json(m);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/duplicate|unique/i.test(msg)) {
+        res.status(409).json({ error: "label déjà existant" });
+        return;
+      }
+      throw e;
+    }
+  }),
+);
+
+evalRouter.delete(
+  "/models/:id",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "id invalide" });
+      return;
+    }
+    // Garde : un modèle défini comme default ne peut pas être archivé tant
+    // qu'on n'a pas changé le default. Sinon les nouvelles analyses échoue
+    // (no model configured) — comportement explicite.
+    const currentDefault = await db.getSetting(db.SETTING_DEFAULT_MODEL_ID);
+    if (currentDefault === id) {
+      res
+        .status(409)
+        .json({ error: "default model, change settings first" });
+      return;
+    }
+    const ok = await db.archiveModel(id);
+    if (!ok) {
+      res.status(404).json({ error: "modèle inconnu ou déjà archivé" });
+      return;
+    }
+    res.json({ ok: true });
+  }),
+);
+
+// Settings k/v générique : aujourd'hui un seul setting exposé en route
+// dédiée (default_model_id) pour clarifier le contrat côté UI ; on pourra
+// ajouter d'autres settings au même endpoint pattern.
+evalRouter.get(
+  "/settings/default-model",
+  wrap(async (_req, res) => {
+    const modelId = await db.getSetting(db.SETTING_DEFAULT_MODEL_ID);
+    if (!modelId) {
+      res.json({ modelId: null, model: null });
+      return;
+    }
+    const m = await db.getModel(modelId);
+    res.json({ modelId, model: m });
+  }),
+);
+
+evalRouter.put(
+  "/settings/default-model",
+  wrap(async (req, res) => {
+    const modelId = String(req.body?.modelId ?? "").trim();
+    if (!UUID_RE.test(modelId)) {
+      res.status(400).json({ error: "modelId invalide" });
+      return;
+    }
+    const m = await db.getModel(modelId);
+    if (!m) {
+      res.status(400).json({ error: "modèle inconnu" });
+      return;
+    }
+    if (m.is_archived) {
+      res.status(400).json({ error: "modèle archivé" });
+      return;
+    }
+    await db.setSetting(db.SETTING_DEFAULT_MODEL_ID, modelId);
+    res.json({ modelId, model: m });
+  }),
+);

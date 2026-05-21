@@ -190,6 +190,90 @@ export const ensureSchema = async (): Promise<void> => {
       ON batches (created_at DESC);
   `);
 
+  // Registre des modèles d'inférence + table de settings k/v générique. Le
+  // modèle utilisé par chaque analyse/batch est persisté (FK SET NULL en cas
+  // de suppression, mais en pratique on soft-delete via is_archived).
+  // Settings k/v générique pour configs globales (default_model_id, etc.).
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS models (
+      id           UUID PRIMARY KEY,
+      label        TEXT NOT NULL UNIQUE,
+      aws_model_id TEXT NOT NULL,
+      is_archived  BOOLEAN NOT NULL DEFAULT false,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    -- Renommage pour bases pré-existantes : models.model_id (string AWS)
+    -- prête à confusion avec analyses.model_id (UUID FK). aws_model_id est
+    -- explicite.
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'models' AND column_name = 'model_id'
+      ) THEN
+        ALTER TABLE models RENAME COLUMN model_id TO aws_model_id;
+      END IF;
+    END $$;
+    DROP INDEX IF EXISTS models_model_id_uniq;
+    CREATE UNIQUE INDEX IF NOT EXISTS models_aws_model_id_uniq
+      ON models (aws_model_id);
+    -- Index partiel : l'écrasante majorité des SELECT filtre is_archived=false
+    -- et trie par label. Un B-tree complet sur le booléen seul ne servait à
+    -- rien (sélectivité ~50/50).
+    DROP INDEX IF EXISTS models_active;
+    CREATE INDEX IF NOT EXISTS models_label_active
+      ON models (label) WHERE is_archived = false;
+    -- Cleanup pour bases pré-existantes : provider était une étiquette UI
+    -- jamais lue pour l'appel Bedrock (le préfixe d'aws_model_id suffit).
+    ALTER TABLE models DROP CONSTRAINT IF EXISTS models_provider_model_id_key;
+    ALTER TABLE models DROP COLUMN IF EXISTS provider;
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    ALTER TABLE analyses
+      ADD COLUMN IF NOT EXISTS model_id UUID REFERENCES models(id) ON DELETE SET NULL;
+    ALTER TABLE batches
+      ADD COLUMN IF NOT EXISTS model_id UUID REFERENCES models(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS analyses_model
+      ON analyses (model_id) WHERE model_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS batches_model
+      ON batches (model_id) WHERE model_id IS NOT NULL;
+  `);
+
+  // Seed non-destructif : row "Legacy (claude-sonnet-4-6)" archived pour
+  // représenter le modèle pré-feature, puis backfill `model_id` NULL → cette
+  // row. Idempotent : ON CONFLICT DO NOTHING + WHERE model_id IS NULL.
+  // Sécurise la cohérence FK (toutes les lignes pointent vers une row models
+  // valide après cette migration), tout en gardant la trace historique. Une
+  // fois en place, on peut activer la garde "model_id NOT NULL" dans une
+  // future migration si besoin.
+  {
+    const legacyId = "00000000-0000-0000-0000-000000000001";
+    await p.query(
+      `INSERT INTO models (id, label, aws_model_id, is_archived)
+       VALUES ($1, 'Legacy (claude-sonnet-4-6)', 'claude-sonnet-4-6', true)
+       ON CONFLICT (id) DO NOTHING`,
+      [legacyId],
+    );
+    const a = await p.query(
+      `UPDATE analyses SET model_id = $1 WHERE model_id IS NULL`,
+      [legacyId],
+    );
+    const b = await p.query(
+      `UPDATE batches SET model_id = $1 WHERE model_id IS NULL`,
+      [legacyId],
+    );
+    if ((a.rowCount ?? 0) > 0 || (b.rowCount ?? 0) > 0) {
+      console.error(
+        `[db] backfill Legacy model: analyses=${a.rowCount ?? 0} batches=${b.rowCount ?? 0}`,
+      );
+    }
+  }
+
   // Seed par famille : défaut analysis (classifier) + défaut reply (playbook
   // DG), chacun actif si sa famille est vide.
   const seed = async (
@@ -474,17 +558,19 @@ export const insertAnalysis = async (args: {
   status: string;
   payload: unknown;
   batchId?: string;
+  modelId?: string;
 }): Promise<{ id: string }> => {
   const { rows } = await getPool().query<{ id: string }>(
     `INSERT INTO analyses
-       (conversation_id, prompt_name, status, payload, batch_id)
-     VALUES ($1, $2, $3, $4::jsonb, $5) RETURNING id::text AS id`,
+       (conversation_id, prompt_name, status, payload, batch_id, model_id)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6) RETURNING id::text AS id`,
     [
       args.conversationId,
       args.promptName,
       args.status,
       JSON.stringify(args.payload),
       args.batchId ?? null,
+      args.modelId ?? null,
     ],
   );
   return rows[0];
@@ -623,6 +709,9 @@ export interface AnalysisRow {
   edited_at: string | null;
   created_at: string;
   payload: unknown;
+  model_id: string | null;
+  model_label: string | null;
+  model_aws_id: string | null;
 }
 
 export const getConversationDetail = async (
@@ -641,9 +730,15 @@ export const getConversationDetail = async (
   );
   if (c.rows.length === 0) return null;
   const a = await p.query<AnalysisRow>(
-    `SELECT id::text AS id, prompt_name, status, is_canon, edited_at,
-            created_at, payload
-     FROM analyses WHERE conversation_id = $1 ORDER BY created_at DESC`,
+    `SELECT a.id::text AS id, a.prompt_name, a.status, a.is_canon, a.edited_at,
+            a.created_at, a.payload,
+            a.model_id::text AS model_id,
+            m.label AS model_label,
+            m.aws_model_id AS model_aws_id
+     FROM analyses a
+     LEFT JOIN models m ON m.id = a.model_id
+     WHERE a.conversation_id = $1
+     ORDER BY a.created_at DESC`,
     [conversationId],
   );
   const r = await p.query<ReplyRow>(
@@ -911,6 +1006,9 @@ export interface BatchRow {
   source: BatchSource;
   input_count: number;
   source_ids: string[];
+  model_id: string | null;
+  model_label: string | null;
+  model_aws_id: string | null;
 }
 
 export interface BatchListItem {
@@ -927,6 +1025,7 @@ export interface BatchListItem {
   n_no_canon: number;
   n_skipped: number;
   n_error: number;
+  model_label: string | null;
 }
 
 export interface BatchAnalysisItem {
@@ -1006,21 +1105,37 @@ const BATCH_JOIN_CTE = `
   )
 `;
 
-const selectBatchCols = `id, created_at::text AS created_at,
-  completed_at::text AS completed_at,
-  status, prompt_name, source, input_count, source_ids`;
+const selectBatchColsWithModel = `b.id, b.created_at::text AS created_at,
+  b.completed_at::text AS completed_at,
+  b.status, b.prompt_name, b.source, b.input_count, b.source_ids,
+  b.model_id::text AS model_id,
+  m.label AS model_label,
+  m.aws_model_id AS model_aws_id`;
 
 export const createBatch = async (args: {
   promptName: string | null;
   source: BatchSource;
   sourceIds: string[];
+  modelId?: string | null;
 }): Promise<BatchRow> => {
   const id = randomUUID();
   const { rows } = await getPool().query<BatchRow>(
-    `INSERT INTO batches (id, prompt_name, source, input_count, source_ids)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING ${selectBatchCols}`,
-    [id, args.promptName, args.source, args.sourceIds.length, args.sourceIds],
+    `WITH inserted AS (
+       INSERT INTO batches (id, prompt_name, source, input_count, source_ids, model_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *
+     )
+     SELECT ${selectBatchColsWithModel}
+     FROM inserted b
+     LEFT JOIN models m ON m.id = b.model_id`,
+    [
+      id,
+      args.promptName,
+      args.source,
+      args.sourceIds.length,
+      args.sourceIds,
+      args.modelId ?? null,
+    ],
   );
   return rows[0];
 };
@@ -1041,7 +1156,10 @@ export const updateBatchStatus = async (
 
 export const getBatch = async (id: string): Promise<BatchRow | null> => {
   const { rows } = await getPool().query<BatchRow>(
-    `SELECT ${selectBatchCols} FROM batches WHERE id = $1`,
+    `SELECT ${selectBatchColsWithModel}
+     FROM batches b
+     LEFT JOIN models m ON m.id = b.model_id
+     WHERE b.id = $1`,
     [id],
   );
   return rows[0] ?? null;
@@ -1077,8 +1195,11 @@ export const listBatches = async (
             COALESCE(a.n_regression, 0) AS n_regression,
             COALESCE(a.n_no_canon, 0)   AS n_no_canon,
             COALESCE(a.n_skipped, 0)    AS n_skipped,
-            COALESCE(a.n_error, 0)      AS n_error
-       FROM batches b LEFT JOIN agg a ON a.batch_id = b.id
+            COALESCE(a.n_error, 0)      AS n_error,
+            m.label                     AS model_label
+       FROM batches b
+       LEFT JOIN agg a ON a.batch_id = b.id
+       LEFT JOIN models m ON m.id = b.model_id
       ORDER BY b.created_at DESC
       LIMIT $1 OFFSET $2`,
     [pageSize, offset],
@@ -1203,4 +1324,148 @@ export const computeBatchMetricsFromRows = (
     by_label,
     by_sub_label,
   };
+};
+
+// =============================================================================
+// Models registry + Settings (k/v) + resolution helper
+// =============================================================================
+
+export interface Model {
+  id: string;
+  label: string;
+  aws_model_id: string;
+  is_archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+const selectModelCols = `id::text AS id, label, aws_model_id,
+  is_archived, created_at::text AS created_at, updated_at::text AS updated_at`;
+
+export const listModels = async (
+  includeArchived = false,
+): Promise<Model[]> => {
+  const { rows } = await getPool().query<Model>(
+    `SELECT ${selectModelCols} FROM models
+     ${includeArchived ? "" : "WHERE is_archived = false"}
+     ORDER BY label ASC`,
+  );
+  return rows;
+};
+
+export const getModel = async (id: string): Promise<Model | null> => {
+  const { rows } = await getPool().query<Model>(
+    `SELECT ${selectModelCols} FROM models WHERE id = $1`,
+    [id],
+  );
+  return rows[0] ?? null;
+};
+
+export const createModel = async (args: {
+  label: string;
+  modelId: string;
+}): Promise<Model> => {
+  const id = randomUUID();
+  const { rows } = await getPool().query<Model>(
+    `INSERT INTO models (id, label, aws_model_id)
+     VALUES ($1, $2, $3)
+     RETURNING ${selectModelCols}`,
+    [id, args.label, args.modelId],
+  );
+  return rows[0];
+};
+
+export const updateModel = async (
+  id: string,
+  args: { label?: string },
+): Promise<Model | null> => {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  if (args.label !== undefined) {
+    values.push(args.label);
+    fields.push(`label = $${values.length}`);
+  }
+  if (fields.length === 0) return getModel(id);
+  fields.push(`updated_at = now()`);
+  values.push(id);
+  const { rows } = await getPool().query<Model>(
+    `UPDATE models SET ${fields.join(", ")}
+     WHERE id = $${values.length}
+     RETURNING ${selectModelCols}`,
+    values,
+  );
+  return rows[0] ?? null;
+};
+
+export const archiveModel = async (id: string): Promise<boolean> => {
+  const { rowCount } = await getPool().query(
+    `UPDATE models SET is_archived = true, updated_at = now()
+     WHERE id = $1 AND is_archived = false`,
+    [id],
+  );
+  return (rowCount ?? 0) > 0;
+};
+
+// Settings k/v générique.
+export const getSetting = async (key: string): Promise<string | null> => {
+  const { rows } = await getPool().query<{ value: string }>(
+    `SELECT value FROM settings WHERE key = $1`,
+    [key],
+  );
+  return rows[0]?.value ?? null;
+};
+
+export const setSetting = async (
+  key: string,
+  value: string,
+): Promise<void> => {
+  await getPool().query(
+    `INSERT INTO settings (key, value)
+     VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE
+       SET value = EXCLUDED.value, updated_at = now()`,
+    [key, value],
+  );
+};
+
+export const SETTING_DEFAULT_MODEL_ID = "default_model_id";
+
+// Erreur typée pour distinguer "config user manquante" (action user : aller
+// dans /eval/settings) d'une vraie 500. Mappée en 409 dans routes.ts.
+export class ModelNotConfiguredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ModelNotConfiguredError";
+  }
+}
+
+// Résolution du modèle effectif. Priorité : modelId explicite (de la route)
+// > settings.default_model_id > erreur claire (PAS de fallback env). Retourne
+// { uuid, awsModelId }. Vérifie aussi is_archived (un modèle archivé ne peut
+// être ni explicite ni default valide).
+export const resolveEffectiveModelId = async (
+  explicitModelId?: string | null,
+): Promise<{ uuid: string; awsModelId: string }> => {
+  const explicit = explicitModelId?.trim();
+  if (explicit) {
+    const m = await getModel(explicit);
+    if (!m) throw new ModelNotConfiguredError(`Model not found: ${explicit}`);
+    if (m.is_archived) {
+      throw new ModelNotConfiguredError(`Model is archived: ${m.label}`);
+    }
+    return { uuid: m.id, awsModelId: m.aws_model_id };
+  }
+  const defaultId = await getSetting(SETTING_DEFAULT_MODEL_ID);
+  if (!defaultId) {
+    throw new ModelNotConfiguredError(
+      "No inference model configured: set a default in /eval/settings or pass modelId.",
+    );
+  }
+  const m = await getModel(defaultId);
+  if (!m || m.is_archived) {
+    throw new ModelNotConfiguredError(
+      "Default model is missing or archived: update /eval/settings.",
+    );
+  }
+  return { uuid: m.id, awsModelId: m.aws_model_id };
 };

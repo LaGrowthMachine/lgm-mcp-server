@@ -57,8 +57,9 @@ const resolveReplyPrompt = async (
 
 export const generateReply = async (
   conversationId: string,
-  promptName?: string,
+  options: { model: string; promptName?: string },
 ): Promise<GenerateReplyResult> => {
+  const { model, promptName } = options;
   if (!/^[a-f0-9]{24}$/i.test(conversationId)) {
     throw new Error(
       "conversationId invalide — 24 caractères hexadécimaux attendus.",
@@ -103,7 +104,7 @@ export const generateReply = async (
     `</CONVERSATION_${delimiter}>`,
   ].join("\n\n");
 
-  const replyText = await inferText({ systemPrompt, userMessage });
+  const replyText = await inferText({ model, systemPrompt, userMessage });
 
   return {
     conversation: formatted.messages,

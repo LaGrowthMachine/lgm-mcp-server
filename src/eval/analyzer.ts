@@ -76,8 +76,9 @@ const resolvePrompt = async (
 
 export const analyzeConversationWithDbPrompt = async (
   conversationId: string,
-  promptName?: string,
+  options: { model: string; promptName?: string },
 ): Promise<AnalyzeResult> => {
+  const { model, promptName } = options;
   if (!/^[a-f0-9]{24}$/i.test(conversationId)) {
     throw new Error(
       "conversationId invalide — 24 caractères hexadécimaux attendus.",
@@ -118,6 +119,7 @@ export const analyzeConversationWithDbPrompt = async (
   )}\n</CONVERSATION_${delimiter}>`;
 
   const classification = await inferStructured<Record<string, unknown>>({
+    model,
     systemPrompt,
     userMessage,
     toolName: CLASSIFIER_TOOL_NAME,

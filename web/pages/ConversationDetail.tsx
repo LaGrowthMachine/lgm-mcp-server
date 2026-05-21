@@ -559,6 +559,9 @@ export function ConversationDetail() {
                       <Tag color="default">{a.status}</Tag>
                     )}
                     <span>prompt {a.prompt_name ?? "—"}</span>
+                    <span style={{ color: "#888" }}>
+                      modèle {a.model_label ?? "—"}
+                    </span>
                     <Typography.Text
                       type="secondary"
                       style={{ fontSize: 12 }}
