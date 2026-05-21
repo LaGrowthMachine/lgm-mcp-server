@@ -1,13 +1,26 @@
-import { __resetClientForTests, maskSensitive, runDbExplorerAgent } from "./agentLoop";
+import {
+  __resetClientForTests,
+  maskSensitive,
+  runDbExplorerAgent,
+} from "./agentLoop";
+import {
+  callConverse,
+  type ConverseResponse,
+} from "../../inference/client";
 
-const messagesCreate = jest.fn();
-
-jest.mock("@anthropic-ai/bedrock-sdk", () => ({
+// On mock `callConverse` (façade Converse de notre wrapper Bedrock). Les
+// tests dérouent la boucle sans appel réseau et inspectent le format Converse
+// passé au modèle (modelId + messages + toolConfig).
+jest.mock("../../inference/client", () => ({
   __esModule: true,
-  default: jest.fn().mockImplementation(() => ({
-    messages: { create: messagesCreate },
-  })),
+  ...jest.requireActual("../../inference/client"),
+  callConverse: jest.fn(),
+  __resetForTests: jest.fn(),
 }));
+
+const mockedCallConverse = callConverse as jest.MockedFunction<
+  typeof callConverse
+>;
 
 // Bypass Postgres resolution dans les tests : on injecte un model fictif au
 // début de la boucle au lieu d'aller chercher en DB le default settings.
@@ -40,27 +53,29 @@ jest.mock("./prompt", () => {
 });
 
 const mkResp = (
-  stop_reason: string,
+  stopReason: string,
   content: object[],
-  input_tokens = 100,
-  output_tokens = 50,
-) => ({
-  stop_reason,
-  content,
-  usage: { input_tokens, output_tokens },
-});
+  inputTokens = 100,
+  outputTokens = 50,
+): ConverseResponse =>
+  ({
+    output: { message: { role: "assistant", content } },
+    stopReason,
+    usage: {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+    },
+  }) as unknown as ConverseResponse;
 
-const text = (s: string) => ({ type: "text", text: s });
-const toolUse = (id: string, expr: string) => ({
-  type: "tool_use",
-  id,
-  name: "run_query",
-  input: { expr },
+const text = (s: string) => ({ text: s });
+const toolUse = (toolUseId: string, expr: string) => ({
+  toolUse: { toolUseId, name: "run_query", input: { expr } },
 });
 
 beforeEach(() => {
   __resetClientForTests();
-  messagesCreate.mockReset();
+  mockedCallConverse.mockReset();
   process.env.REPLY_MANAGER_BEDROCK_TOKEN = "test-token";
   process.env.REPLY_MANAGER_BEDROCK_BASE_URL = "https://example/v1";
   process.env.REPLY_MANAGER_BEDROCK_REGION = "eu-north-1";
@@ -73,7 +88,7 @@ afterEach(() => {
 
 describe("agentLoop", () => {
   it("happy path: 1 tool_use → end_turn", async () => {
-    messagesCreate
+    mockedCallConverse
       .mockResolvedValueOnce(
         mkResp("tool_use", [toolUse("t1", "db.users.countDocuments({})")]),
       )
@@ -89,15 +104,15 @@ describe("agentLoop", () => {
     expect(result.telemetry.failedQueries).toBe(0);
     expect(result.telemetry.loopIterations).toBe(2);
     // Garde la propagation effective du model résolu vers Bedrock : si demain
-    // quelqu'un casse le chaînage resolveEffectiveModelId → callWithRetry,
+    // quelqu'un casse le chaînage resolveEffectiveModelId → callConverse,
     // les autres tests passent toujours.
-    expect(messagesCreate.mock.calls[0][0].model).toBe(
+    expect(mockedCallConverse.mock.calls[0][0].modelId).toBe(
       "anthropic.claude-haiku-4-5",
     );
   });
 
   it("invalid query → reformulated → success", async () => {
-    messagesCreate
+    mockedCallConverse
       .mockResolvedValueOnce(
         mkResp("tool_use", [toolUse("t1", "db.users.insertOne({})")]),
       )
@@ -109,17 +124,21 @@ describe("agentLoop", () => {
     const result = await runDbExplorerAgent("count please");
     expect(result.telemetry.queryCount).toBe(2);
     expect(result.telemetry.failedQueries).toBe(1);
-    // First tool_result (after invalid insertOne) carries is_error=true.
-    const secondCall = messagesCreate.mock.calls[1][0];
-    expect(secondCall.messages[2].content[0].is_error).toBe(true);
-    // Second tool_result (after valid countDocuments) carries is_error=false.
-    const thirdCall = messagesCreate.mock.calls[2][0];
-    expect(thirdCall.messages[4].content[0].is_error).toBe(false);
+    // 1er toolResult (après insertOne invalide) → status=error
+    const secondCall = mockedCallConverse.mock.calls[1][0];
+    expect(secondCall.messages[2].content[0]).toMatchObject({
+      toolResult: { status: "error" },
+    });
+    // 2e toolResult (après countDocuments valide) → status=success
+    const thirdCall = mockedCallConverse.mock.calls[2][0];
+    expect(thirdCall.messages[4].content[0]).toMatchObject({
+      toolResult: { status: "success" },
+    });
   });
 
   it("MAX_ITERATIONS exceeded", async () => {
     for (let i = 0; i < 12; i++) {
-      messagesCreate.mockResolvedValueOnce(
+      mockedCallConverse.mockResolvedValueOnce(
         mkResp("tool_use", [toolUse(`t${i}`, "db.users.countDocuments({})")]),
       );
     }
@@ -128,23 +147,31 @@ describe("agentLoop", () => {
     );
   });
 
-  it("stop_reason=max_tokens → truncated error", async () => {
-    messagesCreate.mockResolvedValueOnce(mkResp("max_tokens", [text("partial")]));
+  it("stopReason=max_tokens → truncated error", async () => {
+    mockedCallConverse.mockResolvedValueOnce(
+      mkResp("max_tokens", [text("partial")]),
+    );
     await expect(runDbExplorerAgent("brief")).rejects.toThrow(/truncated/);
   });
 
-  it("stop_reason=refusal → Unsupported stop_reason", async () => {
-    messagesCreate.mockResolvedValueOnce(mkResp("refusal", []));
-    await expect(runDbExplorerAgent("brief")).rejects.toThrow(/Unsupported stop_reason: refusal/);
+  it("stopReason=guardrail_intervened → Unsupported stop_reason", async () => {
+    mockedCallConverse.mockResolvedValueOnce(
+      mkResp("guardrail_intervened", []),
+    );
+    await expect(runDbExplorerAgent("brief")).rejects.toThrow(
+      /Unsupported stop_reason: guardrail_intervened/,
+    );
   });
 
-  it("stop_reason=pause_turn → Unsupported", async () => {
-    messagesCreate.mockResolvedValueOnce(mkResp("pause_turn", []));
-    await expect(runDbExplorerAgent("brief")).rejects.toThrow(/pause_turn/);
+  it("stopReason=content_filtered → Unsupported", async () => {
+    mockedCallConverse.mockResolvedValueOnce(mkResp("content_filtered", []));
+    await expect(runDbExplorerAgent("brief")).rejects.toThrow(
+      /content_filtered/,
+    );
   });
 
-  it("multi tool_use: 2 blocks → 1 assistant push, 1 user push with 2 tool_results", async () => {
-    messagesCreate
+  it("multi tool_use: 2 blocks → 1 assistant push, 1 user push with 2 toolResults", async () => {
+    mockedCallConverse
       .mockResolvedValueOnce(
         mkResp("tool_use", [
           toolUse("t1", "db.users.countDocuments({})"),
@@ -156,34 +183,38 @@ describe("agentLoop", () => {
     const result = await runDbExplorerAgent("two counts");
     expect(result.telemetry.queryCount).toBe(2);
 
-    // Inspect the messages passed to the 2nd call to confirm shape.
-    const secondCallArgs = messagesCreate.mock.calls[1][0];
+    const secondCallArgs = mockedCallConverse.mock.calls[1][0];
     const msgs = secondCallArgs.messages;
-    // Initial user brief + 1 assistant push + 1 user push (2 tool_results).
+    // Initial user brief + 1 assistant push + 1 user push (2 toolResults).
     expect(msgs).toHaveLength(3);
     expect(msgs[1].role).toBe("assistant");
     expect(msgs[2].role).toBe("user");
     expect(Array.isArray(msgs[2].content)).toBe(true);
-    expect(msgs[2].content.length).toBe(2);
-    expect(msgs[2].content[0].type).toBe("tool_result");
+    expect(msgs[2].content).toHaveLength(2);
+    expect(msgs[2].content[0]).toHaveProperty("toolResult");
   });
 
-  it("stop_reason=tool_use with 0 tool_use blocks → error", async () => {
-    messagesCreate.mockResolvedValueOnce(mkResp("tool_use", [text("nothing")]));
+  it("stopReason=tool_use with 0 tool_use blocks → error", async () => {
+    mockedCallConverse.mockResolvedValueOnce(
+      mkResp("tool_use", [text("nothing")]),
+    );
     await expect(runDbExplorerAgent("brief")).rejects.toThrow(
       /Inconsistent response/,
     );
   });
 
-  it("input.expr non-string → tool_result is_error, loop continues", async () => {
-    messagesCreate
+  it("input.expr non-string → tool_result status=error, loop continues", async () => {
+    mockedCallConverse
       .mockResolvedValueOnce(
-        mkResp("tool_use", [{
-          type: "tool_use",
-          id: "t1",
-          name: "run_query",
-          input: { expr: 42 },
-        }]),
+        mkResp("tool_use", [
+          {
+            toolUse: {
+              toolUseId: "t1",
+              name: "run_query",
+              input: { expr: 42 },
+            },
+          },
+        ]),
       )
       .mockResolvedValueOnce(mkResp("end_turn", [text("Adjusted.")]));
 
@@ -193,46 +224,40 @@ describe("agentLoop", () => {
     // can't see the model fumbling).
     expect(result.telemetry.queryCount).toBe(1);
     expect(result.telemetry.failedQueries).toBe(1);
-    const secondCall = messagesCreate.mock.calls[1][0];
-    const toolResult = secondCall.messages[2].content[0];
-    expect(toolResult.is_error).toBe(true);
-    expect(toolResult.content).toMatch(/expr must be a string/);
-  });
-
-  it("429 → 1 retry, success on 2nd call", async () => {
-    const error: Error & { status?: number } = new Error("rate limit");
-    error.status = 429;
-
-    messagesCreate
-      .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce(mkResp("end_turn", [text("OK after retry.")]));
-
-    const result = await runDbExplorerAgent("brief");
-    expect(result.answer).toBe("OK after retry.");
-    expect(messagesCreate).toHaveBeenCalledTimes(2);
-  });
-
-  it("429 twice → error 'Inference rate-limited'", async () => {
-    const error: Error & { status?: number } = new Error("rate limit");
-    error.status = 429;
-    messagesCreate.mockRejectedValueOnce(error).mockRejectedValueOnce(error);
-    await expect(runDbExplorerAgent("brief")).rejects.toThrow(/rate-limited/);
+    const secondCall = mockedCallConverse.mock.calls[1][0];
+    const toolResult = (
+      secondCall.messages[2].content[0] as {
+        toolResult: { status: string; content: { text: string }[] };
+      }
+    ).toolResult;
+    expect(toolResult.status).toBe("error");
+    expect(toolResult.content[0].text).toMatch(/expr must be a string/);
   });
 
   it("context cumulé > 150_000 → 'too much context'", async () => {
-    messagesCreate.mockResolvedValueOnce(
-      mkResp("tool_use", [toolUse("t1", "db.users.countDocuments({})")], 200_000),
+    mockedCallConverse.mockResolvedValueOnce(
+      mkResp(
+        "tool_use",
+        [toolUse("t1", "db.users.countDocuments({})")],
+        200_000,
+      ),
     );
-    await expect(runDbExplorerAgent("huge")).rejects.toThrow(/too much context/);
+    await expect(runDbExplorerAgent("huge")).rejects.toThrow(
+      /too much context/,
+    );
   });
 
   it("end_turn with empty answer + no queries → 'refused to act'", async () => {
-    messagesCreate.mockResolvedValueOnce(mkResp("end_turn", [text("")]));
-    await expect(runDbExplorerAgent("brief")).rejects.toThrow(/refused to act/);
+    mockedCallConverse.mockResolvedValueOnce(
+      mkResp("end_turn", [text("")]),
+    );
+    await expect(runDbExplorerAgent("brief")).rejects.toThrow(
+      /refused to act/,
+    );
   });
 
   it("end_turn with queries>0 but empty answer → throws 'no narrative'", async () => {
-    messagesCreate
+    mockedCallConverse
       .mockResolvedValueOnce(
         mkResp("tool_use", [toolUse("t1", "db.users.countDocuments({})")]),
       )
@@ -243,7 +268,7 @@ describe("agentLoop", () => {
   });
 
   it("caps tool_use blocks per iteration", async () => {
-    messagesCreate.mockResolvedValueOnce(
+    mockedCallConverse.mockResolvedValueOnce(
       mkResp("tool_use", [
         toolUse("t1", "db.x.countDocuments({})"),
         toolUse("t2", "db.x.countDocuments({})"),
@@ -256,18 +281,28 @@ describe("agentLoop", () => {
         toolUse("t9", "db.x.countDocuments({})"),
       ]),
     );
-    await expect(runDbExplorerAgent("storm")).rejects.toThrow(/9 tool_use blocks/);
+    await expect(runDbExplorerAgent("storm")).rejects.toThrow(
+      /9 tool_use blocks/,
+    );
   });
 });
 
 describe("maskSensitive", () => {
   it("masks 24-char hex in single quotes", () => {
-    expect(maskSensitive("db.x.findOne({_id: ObjectId('507f1f77bcf86cd799439011')})")).toMatch(/\*\*\*/);
+    expect(
+      maskSensitive(
+        "db.x.findOne({_id: ObjectId('507f1f77bcf86cd799439011')})",
+      ),
+    ).toMatch(/\*\*\*/);
   });
 
   it("masks email-like strings", () => {
-    expect(maskSensitive("db.users.findOne({email: 'alex@foo.com'})")).toMatch(/\*\*\*@\*\*\*/);
-    expect(maskSensitive('db.users.findOne({email: "alex@foo.com"})')).toMatch(/\*\*\*@\*\*\*/);
+    expect(maskSensitive("db.users.findOne({email: 'alex@foo.com'})")).toMatch(
+      /\*\*\*@\*\*\*/,
+    );
+    expect(maskSensitive('db.users.findOne({email: "alex@foo.com"})')).toMatch(
+      /\*\*\*@\*\*\*/,
+    );
   });
 
   it("masks bare digit runs (phone numbers)", () => {

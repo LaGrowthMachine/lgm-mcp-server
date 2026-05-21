@@ -1,15 +1,9 @@
-import { callWithRetry, getInferenceClient, __resetForTests } from "./client";
-
-const messagesCreate = jest.fn();
-const ctor = jest.fn();
-
-jest.mock("@anthropic-ai/bedrock-sdk", () => ({
-  __esModule: true,
-  default: jest.fn().mockImplementation((opts: unknown) => {
-    ctor(opts);
-    return { messages: { create: messagesCreate } };
-  }),
-}));
+import {
+  callConverse,
+  ConverseHTTPError,
+  __resetForTests,
+  type ConverseRequest,
+} from "./client";
 
 const setEnv = () => {
   process.env.REPLY_MANAGER_BEDROCK_TOKEN = "test-token";
@@ -17,98 +11,144 @@ const setEnv = () => {
   process.env.REPLY_MANAGER_BEDROCK_REGION = "eu-north-1";
 };
 
+const fakeResponseBody = {
+  output: {
+    message: { role: "assistant", content: [{ text: "hi" }] },
+  },
+  stopReason: "end_turn",
+  usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+};
+
+const sampleReq: ConverseRequest = {
+  modelId: "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+  messages: [{ role: "user", content: [{ text: "hi" }] }],
+  inferenceConfig: { maxTokens: 100 },
+};
+
+let fetchSpy: jest.SpyInstance;
+
+const mkFetchResponse = (
+  status: number,
+  body: object | string,
+): Response => {
+  const text = typeof body === "string" ? body : JSON.stringify(body);
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: jest.fn().mockResolvedValue(text),
+  } as unknown as Response;
+};
+
 beforeEach(() => {
   __resetForTests();
-  messagesCreate.mockReset();
-  ctor.mockReset();
   delete process.env.REPLY_MANAGER_BEDROCK_TOKEN;
   delete process.env.REPLY_MANAGER_BEDROCK_BASE_URL;
   delete process.env.REPLY_MANAGER_BEDROCK_REGION;
+  fetchSpy = jest.spyOn(global, "fetch");
 });
 
-const fakeMessage = { stop_reason: "end_turn", content: [], usage: { input_tokens: 1, output_tokens: 1 } };
-const sampleReq = {
-  model: "anthropic.claude-sonnet-4-6",
-  max_tokens: 100,
-  messages: [{ role: "user" as const, content: "hi" }],
-};
+afterEach(() => {
+  fetchSpy.mockRestore();
+});
 
-describe("inference client", () => {
-  it("instantiates AnthropicBedrock with the prefixed env vars", () => {
+describe("callConverse", () => {
+  it("calls the right URL with Bearer auth and the JSON payload", async () => {
     setEnv();
-    getInferenceClient();
-    expect(ctor).toHaveBeenCalledTimes(1);
-    expect(ctor.mock.calls[0][0]).toEqual({
-      apiKey: "test-token",
-      baseURL: "https://example/v1",
-      awsRegion: "eu-north-1",
-    });
+    fetchSpy.mockResolvedValueOnce(mkFetchResponse(200, fakeResponseBody));
+
+    const r = await callConverse(sampleReq);
+    expect(r).toEqual(fakeResponseBody);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      "https://example/v1/model/eu.anthropic.claude-haiku-4-5-20251001-v1%3A0/converse",
+    );
+    expect(init.method).toBe("POST");
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer test-token");
+    expect(headers["Content-Type"]).toBe("application/json");
+    const body = JSON.parse(init.body as string);
+    // modelId is in the URL, not in the body.
+    expect(body).not.toHaveProperty("modelId");
+    expect(body.messages[0].content[0].text).toBe("hi");
   });
 
-  it("is singleton — second call reuses the same client", () => {
-    setEnv();
-    getInferenceClient();
-    getInferenceClient();
-    expect(ctor).toHaveBeenCalledTimes(1);
+  it("strips trailing slash on baseURL", async () => {
+    process.env.REPLY_MANAGER_BEDROCK_TOKEN = "t";
+    process.env.REPLY_MANAGER_BEDROCK_BASE_URL = "https://example/v1/";
+    process.env.REPLY_MANAGER_BEDROCK_REGION = "eu-north-1";
+    fetchSpy.mockResolvedValueOnce(mkFetchResponse(200, fakeResponseBody));
+    await callConverse(sampleReq);
+    const [url] = fetchSpy.mock.calls[0] as [string];
+    expect(url).toMatch(/^https:\/\/example\/v1\/model\//);
+    expect(url).not.toMatch(/v1\/\/model/);
   });
 
   it.each([
-    ["REPLY_MANAGER_BEDROCK_TOKEN", { url: "u", region: "eu" }],
-    ["REPLY_MANAGER_BEDROCK_BASE_URL", { token: "t", region: "eu" }],
-    ["REPLY_MANAGER_BEDROCK_REGION", { token: "t", url: "u" }],
-  ])("throws when %s is missing", (envName, partial: { token?: string; url?: string; region?: string }) => {
-    if (partial.token) process.env.REPLY_MANAGER_BEDROCK_TOKEN = partial.token;
-    if (partial.url) process.env.REPLY_MANAGER_BEDROCK_BASE_URL = partial.url;
-    if (partial.region) process.env.REPLY_MANAGER_BEDROCK_REGION = partial.region;
-    expect(() => getInferenceClient()).toThrow(new RegExp(envName));
+    "REPLY_MANAGER_BEDROCK_TOKEN",
+    "REPLY_MANAGER_BEDROCK_BASE_URL",
+    "REPLY_MANAGER_BEDROCK_REGION",
+  ])("throws when %s is missing", async (envName) => {
+    setEnv();
+    delete process.env[envName];
+    await expect(callConverse(sampleReq)).rejects.toThrow(new RegExp(envName));
   });
 
-  it("callWithRetry: success on first try → no retry", async () => {
+  it("retries once on 429", async () => {
     setEnv();
-    messagesCreate.mockResolvedValueOnce(fakeMessage);
-    const result = await callWithRetry(sampleReq);
-    expect(result).toBe(fakeMessage);
-    expect(messagesCreate).toHaveBeenCalledTimes(1);
-    expect(messagesCreate.mock.calls[0][1]).toEqual({ timeout: 30_000 });
+    fetchSpy
+      .mockResolvedValueOnce(mkFetchResponse(429, "rate"))
+      .mockResolvedValueOnce(mkFetchResponse(200, fakeResponseBody));
+    const r = await callConverse(sampleReq);
+    expect(r).toEqual(fakeResponseBody);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("callWithRetry: retries on 429", async () => {
+  it("retries once on 503", async () => {
     setEnv();
-    const err = Object.assign(new Error("rate"), { status: 429 });
-    messagesCreate.mockRejectedValueOnce(err).mockResolvedValueOnce(fakeMessage);
-    const result = await callWithRetry(sampleReq);
-    expect(result).toBe(fakeMessage);
-    expect(messagesCreate).toHaveBeenCalledTimes(2);
+    fetchSpy
+      .mockResolvedValueOnce(mkFetchResponse(503, "unavail"))
+      .mockResolvedValueOnce(mkFetchResponse(200, fakeResponseBody));
+    const r = await callConverse(sampleReq);
+    expect(r).toEqual(fakeResponseBody);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("callWithRetry: retries on ThrottlingException name", async () => {
+  it("second 429 throws rate-limited message", async () => {
     setEnv();
-    const err = Object.assign(new Error("throttled"), { name: "ThrottlingException" });
-    messagesCreate.mockRejectedValueOnce(err).mockResolvedValueOnce(fakeMessage);
-    const result = await callWithRetry(sampleReq);
-    expect(result).toBe(fakeMessage);
-    expect(messagesCreate).toHaveBeenCalledTimes(2);
+    fetchSpy
+      .mockResolvedValueOnce(mkFetchResponse(429, "rate"))
+      .mockResolvedValueOnce(mkFetchResponse(429, "rate"));
+    await expect(callConverse(sampleReq)).rejects.toThrow(
+      "Inference rate-limited, retry shortly.",
+    );
   });
 
-  it("callWithRetry: second failure throws rate-limited message", async () => {
+  it("4xx non-retryable propagates as ConverseHTTPError", async () => {
     setEnv();
-    const err = Object.assign(new Error("rate"), { status: 503 });
-    messagesCreate.mockRejectedValueOnce(err).mockRejectedValueOnce(err);
-    await expect(callWithRetry(sampleReq)).rejects.toThrow("Inference rate-limited, retry shortly.");
+    fetchSpy.mockResolvedValueOnce(
+      mkFetchResponse(400, { message: "bad request" }),
+    );
+    await expect(callConverse(sampleReq)).rejects.toThrow(ConverseHTTPError);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("callWithRetry: non-retryable error is propagated as-is", async () => {
+  it("network error (TypeError) retries once", async () => {
     setEnv();
-    const err = Object.assign(new Error("bad request"), { status: 400 });
-    messagesCreate.mockRejectedValueOnce(err);
-    await expect(callWithRetry(sampleReq)).rejects.toBe(err);
-    expect(messagesCreate).toHaveBeenCalledTimes(1);
+    fetchSpy
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(mkFetchResponse(200, fakeResponseBody));
+    const r = await callConverse(sampleReq);
+    expect(r).toEqual(fakeResponseBody);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("callWithRetry: honors custom timeoutMs", async () => {
+  it("plain Error (non-network) propagates as-is, no retry", async () => {
     setEnv();
-    messagesCreate.mockResolvedValueOnce(fakeMessage);
-    await callWithRetry(sampleReq, { timeoutMs: 5000 });
-    expect(messagesCreate.mock.calls[0][1]).toEqual({ timeout: 5000 });
+    const boom = new Error("boom");
+    fetchSpy.mockRejectedValueOnce(boom);
+    await expect(callConverse(sampleReq)).rejects.toBe(boom);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

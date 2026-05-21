@@ -1,5 +1,14 @@
-import type Anthropic from "@anthropic-ai/sdk";
-import { callWithRetry } from "../../inference/client";
+import {
+  callConverse,
+  isTextBlock,
+  isToolUseBlock,
+  type ConverseRequest,
+} from "../../inference/client";
+
+// Helpers d'inférence partagés par le harness d'éval (analyzer + reply
+// generator). On parle à Bedrock via la Converse API uniforme — cf. client.ts.
+// Le contrat exposé reste indépendant du provider : `inferStructured` force
+// un tool_use et retourne son input, `inferText` retourne un texte libre.
 
 export interface InferStructuredArgs {
   model: string;
@@ -11,41 +20,53 @@ export interface InferStructuredArgs {
   maxTokens?: number;
 }
 
-export const inferStructured = async <T>(args: InferStructuredArgs): Promise<T> => {
-  let response: Anthropic.Message;
-  try {
-    response = await callWithRetry({
-      model: args.model,
-      max_tokens: args.maxTokens ?? 2000,
+export const inferStructured = async <T>(
+  args: InferStructuredArgs,
+): Promise<T> => {
+  const req: ConverseRequest = {
+    modelId: args.model,
+    system: [{ text: args.systemPrompt }],
+    messages: [{ role: "user", content: [{ text: args.userMessage }] }],
+    inferenceConfig: {
+      maxTokens: args.maxTokens ?? 2000,
       // temperature:0 — déterminisme requis pour la détection de régression
       // du harness d'éval (cf. spec conv-eval-harness, défaut critique #1).
       // Impacte tous les appelants d'analyze_conversation (souhaité).
       temperature: 0,
-      system: args.systemPrompt,
+    },
+    toolConfig: {
       tools: [
         {
-          name: args.toolName,
-          description: args.toolDescription,
-          input_schema: args.toolSchema as Anthropic.Tool.InputSchema,
+          toolSpec: {
+            name: args.toolName,
+            description: args.toolDescription,
+            inputSchema: { json: args.toolSchema },
+          },
         },
       ],
-      tool_choice: { type: "tool", name: args.toolName },
-      messages: [{ role: "user", content: args.userMessage }],
-    });
+      // Force le modèle à appeler l'outil — clé pour la sortie structurée.
+      // Pixtral Large et certains autres rejettent ce mode (400) : ces
+      // modèles restent archivés tant qu'ils ne sont pas adressés via un
+      // chemin alternatif (e.g. JSON mode dédié).
+      toolChoice: { tool: { name: args.toolName } },
+    },
+  };
+
+  let response;
+  try {
+    response = await callConverse(req);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Inference call failed: ${msg}`);
   }
 
-  if (response.stop_reason !== "tool_use") {
+  if (response.stopReason !== "tool_use") {
     throw new Error(
-      `Inference did not complete via tool_use (stop_reason=${response.stop_reason}). Output may be truncated or refused.`,
+      `Inference did not complete via tool_use (stopReason=${response.stopReason}). Output may be truncated or refused.`,
     );
   }
 
-  const toolUses = response.content.filter(
-    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
-  );
+  const toolUses = response.output.message.content.filter(isToolUseBlock);
   if (toolUses.length === 0) {
     throw new Error("Inference returned no tool_use content");
   }
@@ -54,7 +75,7 @@ export const inferStructured = async <T>(args: InferStructuredArgs): Promise<T> 
       `[inference] multiple tool_use blocks (${toolUses.length}); using the last one`,
     );
   }
-  return toolUses[toolUses.length - 1].input as T;
+  return toolUses[toolUses.length - 1].toolUse.input as T;
 };
 
 export interface InferTextArgs {
@@ -69,28 +90,30 @@ export interface InferTextArgs {
 // le texte est alors reproductible, ce qui rend la détection de régression
 // vs réponse favoritée (diff texte) significative.
 export const inferText = async (args: InferTextArgs): Promise<string> => {
-  let response: Anthropic.Message;
+  let response;
   try {
-    response = await callWithRetry({
-      model: args.model,
-      max_tokens: args.maxTokens ?? 1500,
-      temperature: 0,
-      system: args.systemPrompt,
-      messages: [{ role: "user", content: args.userMessage }],
+    response = await callConverse({
+      modelId: args.model,
+      system: [{ text: args.systemPrompt }],
+      messages: [{ role: "user", content: [{ text: args.userMessage }] }],
+      inferenceConfig: {
+        maxTokens: args.maxTokens ?? 1500,
+        temperature: 0,
+      },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Inference call failed: ${msg}`);
   }
 
-  const text = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+  const text = response.output.message.content
+    .filter(isTextBlock)
     .map((b) => b.text)
     .join("")
     .trim();
   if (!text) {
     throw new Error(
-      `Inference returned no text (stop_reason=${response.stop_reason}).`,
+      `Inference returned no text (stopReason=${response.stopReason}).`,
     );
   }
   return text;

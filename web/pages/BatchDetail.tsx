@@ -19,6 +19,7 @@ import {
   BatchRow,
   BatchAnalysisItem,
   BatchVerdict,
+  LabelBreakdownRow,
 } from "../api";
 
 const MAX_CONCURRENCY = 3;
@@ -339,6 +340,146 @@ export function BatchDetail() {
           value={`${metrics.n_total} / ${batch.input_count}`}
         />
       </Space>
+
+      {(metrics.by_label.length > 0 || metrics.by_sub_label.length > 0) && (
+        <Space
+          direction="vertical"
+          size="middle"
+          style={{ width: "100%" }}
+        >
+          {/* Décomposition pass/régression par bucket de canon. Ne tient compte
+              que des analyses pass+regression (no_canon/skipped/error exclus
+              par construction du bucket). Pass rate par ligne = pass / n. */}
+          {metrics.by_label.length > 0 && (
+            <div>
+              <Typography.Title level={5} style={{ marginBottom: 4 }}>
+                Pass / régressions par label
+              </Typography.Title>
+              <Table<LabelBreakdownRow>
+                size="small"
+                rowKey={(r) => `${r.canon_label ?? "__null__"}`}
+                dataSource={metrics.by_label}
+                pagination={false}
+                columns={[
+                  {
+                    title: "Label",
+                    dataIndex: "canon_label",
+                    render: (s: string | null) => (
+                      <code>{labelOrDash(s)}</code>
+                    ),
+                  },
+                  {
+                    title: "Pass rate",
+                    width: 110,
+                    align: "right",
+                    render: (_: unknown, r: LabelBreakdownRow) =>
+                      fmtPct(r.n > 0 ? r.pass / r.n : null),
+                  },
+                  {
+                    title: "n",
+                    dataIndex: "n",
+                    width: 60,
+                    align: "right",
+                  },
+                  {
+                    title: "Pass",
+                    dataIndex: "pass",
+                    width: 70,
+                    align: "right",
+                  },
+                  {
+                    title: "Régressions",
+                    dataIndex: "regression",
+                    width: 110,
+                    align: "right",
+                    render: (n: number) =>
+                      n > 0 ? (
+                        <span style={{ color: "#d48806" }}>{n}</span>
+                      ) : (
+                        n
+                      ),
+                  },
+                  {
+                    title: "Drift majoritaire",
+                    dataIndex: "drift_to",
+                    render: (s: string | null) =>
+                      s ? <code>{s}</code> : "—",
+                  },
+                ]}
+              />
+            </div>
+          )}
+
+          {metrics.by_sub_label.length > 0 && (
+            <div>
+              <Typography.Title level={5} style={{ marginBottom: 4 }}>
+                Pass / régressions par sub_label
+              </Typography.Title>
+              <Table<LabelBreakdownRow>
+                size="small"
+                rowKey={(r) =>
+                  `${r.canon_label ?? "__null__"}|${r.canon_sub_label ?? "__null__"}`
+                }
+                dataSource={metrics.by_sub_label}
+                pagination={false}
+                columns={[
+                  {
+                    title: "Label",
+                    dataIndex: "canon_label",
+                    render: (s: string | null) => (
+                      <code>{labelOrDash(s)}</code>
+                    ),
+                  },
+                  {
+                    title: "Sub label",
+                    dataIndex: "canon_sub_label",
+                    render: (s: string | null) => (
+                      <code>{labelOrDash(s)}</code>
+                    ),
+                  },
+                  {
+                    title: "Pass rate",
+                    width: 110,
+                    align: "right",
+                    render: (_: unknown, r: LabelBreakdownRow) =>
+                      fmtPct(r.n > 0 ? r.pass / r.n : null),
+                  },
+                  {
+                    title: "n",
+                    dataIndex: "n",
+                    width: 60,
+                    align: "right",
+                  },
+                  {
+                    title: "Pass",
+                    dataIndex: "pass",
+                    width: 70,
+                    align: "right",
+                  },
+                  {
+                    title: "Régressions",
+                    dataIndex: "regression",
+                    width: 110,
+                    align: "right",
+                    render: (n: number) =>
+                      n > 0 ? (
+                        <span style={{ color: "#d48806" }}>{n}</span>
+                      ) : (
+                        n
+                      ),
+                  },
+                  {
+                    title: "Drift majoritaire",
+                    dataIndex: "drift_to",
+                    render: (s: string | null) =>
+                      s ? <code>{s}</code> : "—",
+                  },
+                ]}
+              />
+            </div>
+          )}
+        </Space>
+      )}
 
       <div>
         <Typography.Title level={4} style={{ marginBottom: 4 }}>

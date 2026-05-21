@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type Anthropic from "@anthropic-ai/sdk";
 import { EJSON } from "bson";
 import {
   buildDbExplorerSystemPrompt,
@@ -10,7 +9,15 @@ import {
 import { validate, ValidationError } from "./validator";
 import { runValidatedQuery, type RunQueryError, type RunQueryResult } from "./interpreter";
 import { getDb } from "./mongoClient";
-import { callWithRetry, __resetForTests as __resetInferenceClient } from "../../inference/client";
+import {
+  callConverse,
+  isTextBlock,
+  isToolUseBlock,
+  __resetForTests as __resetInferenceClient,
+  type ConverseMessage,
+  type ConverseResponse,
+  type ConverseToolResultBlock,
+} from "../../inference/client";
 import { resolveEffectiveModelId } from "../../eval/db";
 
 const MAX_TOKENS = 4_096;
@@ -120,17 +127,15 @@ const executeRunQuery = async (
   return runValidatedQuery(db, validation);
 };
 
-const extractText = (msg: Anthropic.Message): string =>
-  msg.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+const extractText = (msg: ConverseResponse): string =>
+  msg.output.message.content
+    .filter(isTextBlock)
     .map((b) => b.text)
     .join("\n")
     .trim();
 
-const firstTextBlock = (msg: Anthropic.Message): string => {
-  const block = msg.content.find(
-    (b): b is Anthropic.TextBlock => b.type === "text",
-  );
+const firstTextBlock = (msg: ConverseResponse): string => {
+  const block = msg.output.message.content.find(isTextBlock);
   return block ? block.text.trim() : "";
 };
 
@@ -146,36 +151,37 @@ const runAgentLoop = async (
   let cumulativeInput = 0;
   let loopIterations = 0;
 
-  const messages: Anthropic.MessageParam[] = [
-    { role: "user", content: brief },
+  const messages: ConverseMessage[] = [
+    { role: "user", content: [{ text: brief }] },
   ];
 
   logLine({ reqId, event: "start", "brief.len": brief.length });
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     loopIterations++;
-    const resp = await callWithRetry({
-      model,
-      max_tokens: MAX_TOKENS,
-      system,
-      tools: [
-        {
-          name: RUN_QUERY_TOOL_NAME,
-          description: RUN_QUERY_TOOL_DESCRIPTION,
-          input_schema: RUN_QUERY_TOOL_SCHEMA as Anthropic.Tool.InputSchema,
-        },
-      ],
+    const resp = await callConverse({
+      modelId: model,
+      system: [{ text: system }],
+      inferenceConfig: { maxTokens: MAX_TOKENS },
+      toolConfig: {
+        tools: [
+          {
+            toolSpec: {
+              name: RUN_QUERY_TOOL_NAME,
+              description: RUN_QUERY_TOOL_DESCRIPTION,
+              inputSchema: { json: RUN_QUERY_TOOL_SCHEMA },
+            },
+          },
+        ],
+      },
       messages,
     });
 
-    cumulativeInput += resp.usage.input_tokens ?? 0;
+    cumulativeInput += resp.usage.inputTokens ?? 0;
     tokensUsed +=
-      (resp.usage.input_tokens ?? 0) +
-      (resp.usage.output_tokens ?? 0) +
-      // cache_read_input_tokens is not on the typed Usage in older SDKs;
-      // read defensively via a cast.
-      ((resp.usage as unknown as { cache_read_input_tokens?: number })
-        .cache_read_input_tokens ?? 0);
+      (resp.usage.inputTokens ?? 0) +
+      (resp.usage.outputTokens ?? 0) +
+      (resp.usage.cacheReadInputTokens ?? 0);
 
     if (cumulativeInput > CONTEXT_TOKEN_CAP) {
       throw new Error("Brief produced too much context.");
@@ -184,7 +190,7 @@ const runAgentLoop = async (
     const narration = firstTextBlock(resp);
     logLine({ reqId, iter: loopIterations, narration });
 
-    if (resp.stop_reason === "end_turn") {
+    if (resp.stopReason === "end_turn") {
       const rawAnswer = extractText(resp);
       if (queries.length === 0 && !rawAnswer.trim()) {
         throw new Error("Agent refused to act.");
@@ -210,17 +216,15 @@ const runAgentLoop = async (
       return { answer: rawAnswer, telemetry };
     }
 
-    if (resp.stop_reason === "max_tokens") {
+    if (resp.stopReason === "max_tokens") {
       throw new Error("Inference truncated — narrow the brief.");
     }
 
-    if (resp.stop_reason !== "tool_use") {
-      throw new Error(`Unsupported stop_reason: ${resp.stop_reason}`);
+    if (resp.stopReason !== "tool_use") {
+      throw new Error(`Unsupported stop_reason: ${resp.stopReason}`);
     }
 
-    const toolUses = resp.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
-    );
+    const toolUses = resp.output.message.content.filter(isToolUseBlock);
     if (toolUses.length === 0) {
       throw new Error(
         "Inconsistent response: stop_reason=tool_use but no tool_use blocks.",
@@ -232,18 +236,22 @@ const runAgentLoop = async (
       );
     }
 
-    // Single push of the assistant response.
-    messages.push({ role: "assistant", content: resp.content });
+    // Push the assistant turn verbatim (preserves text + toolUse ordering).
+    messages.push({ role: "assistant", content: resp.output.message.content });
 
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    const toolResultBlocks: { toolResult: ConverseToolResultBlock }[] = [];
     for (const block of toolUses) {
-      const input = block.input as { expr?: unknown };
-      if (typeof input?.expr !== "string") {
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: JSON.stringify({ ok: false, error: "expr must be a string" }),
-          is_error: true,
+      const { toolUseId, input } = block.toolUse;
+      const expr = (input as { expr?: unknown }).expr;
+      if (typeof expr !== "string") {
+        toolResultBlocks.push({
+          toolResult: {
+            toolUseId,
+            content: [
+              { text: JSON.stringify({ ok: false, error: "expr must be a string" }) },
+            ],
+            status: "error",
+          },
         });
         queries.push({
           expr: "[malformed]",
@@ -260,14 +268,15 @@ const runAgentLoop = async (
         });
         continue;
       }
-      const result = await executeRunQuery(input.expr);
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: block.id,
-        content: EJSON.stringify(result, { relaxed: true }),
-        is_error: !result.ok,
+      const result = await executeRunQuery(expr);
+      toolResultBlocks.push({
+        toolResult: {
+          toolUseId,
+          content: [{ text: EJSON.stringify(result, { relaxed: true }) }],
+          status: result.ok ? "success" : "error",
+        },
       });
-      const record = toQueryRecord(input.expr, result);
+      const record = toQueryRecord(expr, result);
       queries.push(record);
       logLine({
         reqId,
@@ -279,8 +288,10 @@ const runAgentLoop = async (
       });
     }
 
-    // Single push of all tool_results in one user message.
-    messages.push({ role: "user", content: toolResults });
+    // All tool_results regrouped in a single user message — Converse expects
+    // tool results in a user-role message immediately following the assistant
+    // turn that produced the matching toolUse blocks.
+    messages.push({ role: "user", content: toolResultBlocks });
   }
 
   throw new Error("Agent exceeded max iterations.");
