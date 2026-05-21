@@ -19,7 +19,6 @@ import {
   BatchRow,
   BatchAnalysisItem,
   BatchVerdict,
-  LabelBreakdownRow,
 } from "../api";
 
 const MAX_CONCURRENCY = 3;
@@ -293,193 +292,135 @@ export function BatchDetail() {
         />
       )}
 
-      <Space size="large" wrap>
-        <Statistic
-          title="Pass rate"
-          value={fmtPct(metrics.pass_rate)}
-          valueStyle={{
-            color:
-              metrics.pass_rate === null
-                ? "#999"
-                : metrics.pass_rate >= 0.9
-                  ? "#3f8600"
-                  : metrics.pass_rate >= 0.7
-                    ? "#d48806"
-                    : "#cf1322",
-          }}
-        />
-        <Statistic
-          title="Pass"
-          value={metrics.n_pass}
-          valueStyle={{ color: "#3f8600" }}
-        />
-        <Statistic
-          title="Régressions"
-          value={metrics.n_regression}
-          valueStyle={{
-            color: metrics.n_regression > 0 ? "#d48806" : undefined,
-          }}
-        />
-        <Statistic
-          title="Pas de canon"
-          value={metrics.n_no_canon}
-          valueStyle={{ color: "#999" }}
-        />
-        <Statistic
-          title="Skipped"
-          value={metrics.n_skipped}
-          valueStyle={{ color: "#999" }}
-        />
-        <Statistic
-          title="Erreurs"
-          value={metrics.n_error}
-          valueStyle={{ color: metrics.n_error > 0 ? "#cf1322" : undefined }}
-        />
-        <Statistic
-          title="Analyses"
-          value={`${metrics.n_total} / ${batch.input_count}`}
-        />
-      </Space>
-
-      {(metrics.by_label.length > 0 || metrics.by_sub_label.length > 0) && (
-        <Space
-          direction="vertical"
-          size="middle"
-          style={{ width: "100%" }}
-        >
-          {/* Décomposition pass/régression par bucket de canon. Ne tient compte
-              que des analyses pass+regression (no_canon/skipped/error exclus
-              par construction du bucket). Pass rate par ligne = pass / n. */}
-          {metrics.by_label.length > 0 && (
-            <div>
-              <Typography.Title level={5} style={{ marginBottom: 4 }}>
-                Pass / régressions par label
-              </Typography.Title>
-              <Table<LabelBreakdownRow>
-                size="small"
-                rowKey={(r) => `${r.canon_label ?? "__null__"}`}
-                dataSource={metrics.by_label}
-                pagination={false}
-                columns={[
-                  {
-                    title: "Label",
-                    dataIndex: "canon_label",
-                    render: (s: string | null) => (
-                      <code>{labelOrDash(s)}</code>
-                    ),
-                  },
-                  {
-                    title: "Pass rate",
-                    width: 110,
-                    align: "right",
-                    render: (_: unknown, r: LabelBreakdownRow) =>
-                      fmtPct(r.n > 0 ? r.pass / r.n : null),
-                  },
-                  {
-                    title: "n",
-                    dataIndex: "n",
-                    width: 60,
-                    align: "right",
-                  },
-                  {
-                    title: "Pass",
-                    dataIndex: "pass",
-                    width: 70,
-                    align: "right",
-                  },
-                  {
-                    title: "Régressions",
-                    dataIndex: "regression",
-                    width: 110,
-                    align: "right",
-                    render: (n: number) =>
-                      n > 0 ? (
-                        <span style={{ color: "#d48806" }}>{n}</span>
-                      ) : (
-                        n
-                      ),
-                  },
-                  {
-                    title: "Drift majoritaire",
-                    dataIndex: "drift_to",
-                    render: (s: string | null) =>
-                      s ? <code>{s}</code> : "—",
-                  },
-                ]}
+      {/* 3 niveaux de strictesse :
+          - global : verdict actuel (label ET sub_label doivent matcher)
+          - label  : on relâche le sub_label (un fail "open.X→open.Y" devient pass)
+          - sub-label : on ne regarde que la concordance sub_label
+          Dénominateur = analyses comparables (verdict pass ou regression).
+          Les autres compteurs (no_canon, skipped, erreurs) restent à droite. */}
+      {(() => {
+        const cmp = rows.filter(
+          (r) => r.verdict === "pass" || r.verdict === "regression",
+        );
+        const denom = cmp.length;
+        const eq = (a: string | null, b: string | null) =>
+          (a ?? null) === (b ?? null);
+        const n_pass_label = cmp.filter((r) =>
+          eq(r.new_label, r.canon_label),
+        ).length;
+        const n_pass_sub = cmp.filter((r) =>
+          eq(r.new_sub_label, r.canon_sub_label),
+        ).length;
+        const levels: {
+          name: string;
+          pass: number;
+          regression: number;
+          rate: number | null;
+        }[] = [
+          {
+            name: "Global",
+            pass: metrics.n_pass,
+            regression: metrics.n_regression,
+            rate: metrics.pass_rate,
+          },
+          {
+            name: "Label",
+            pass: n_pass_label,
+            regression: denom - n_pass_label,
+            rate: denom > 0 ? n_pass_label / denom : null,
+          },
+          {
+            name: "Sub-label",
+            pass: n_pass_sub,
+            regression: denom - n_pass_sub,
+            rate: denom > 0 ? n_pass_sub / denom : null,
+          },
+        ];
+        const rateColor = (r: number | null) =>
+          r === null
+            ? "#999"
+            : r >= 0.9
+              ? "#3f8600"
+              : r >= 0.7
+                ? "#d48806"
+                : "#cf1322";
+        return (
+          <Space size="large" align="start" wrap>
+            <Table
+              size="small"
+              pagination={false}
+              showHeader
+              rowKey="name"
+              dataSource={levels}
+              style={{ minWidth: 380 }}
+              columns={[
+                {
+                  title: "",
+                  dataIndex: "name",
+                  width: 90,
+                  render: (s: string) => <strong>{s}</strong>,
+                },
+                {
+                  title: "Pass rate",
+                  dataIndex: "rate",
+                  width: 100,
+                  align: "right",
+                  render: (r: number | null) => (
+                    <span style={{ color: rateColor(r), fontWeight: 600 }}>
+                      {fmtPct(r)}
+                    </span>
+                  ),
+                },
+                {
+                  title: "Pass",
+                  dataIndex: "pass",
+                  width: 70,
+                  align: "right",
+                  render: (n: number) => (
+                    <span style={{ color: n > 0 ? "#3f8600" : undefined }}>
+                      {n}
+                    </span>
+                  ),
+                },
+                {
+                  title: "Régressions",
+                  dataIndex: "regression",
+                  width: 110,
+                  align: "right",
+                  render: (n: number) => (
+                    <span style={{ color: n > 0 ? "#d48806" : undefined }}>
+                      {n}
+                    </span>
+                  ),
+                },
+              ]}
+            />
+            <Space size="large" wrap>
+              <Statistic
+                title="Pas de canon"
+                value={metrics.n_no_canon}
+                valueStyle={{ color: "#999" }}
               />
-            </div>
-          )}
-
-          {metrics.by_sub_label.length > 0 && (
-            <div>
-              <Typography.Title level={5} style={{ marginBottom: 4 }}>
-                Pass / régressions par sub_label
-              </Typography.Title>
-              <Table<LabelBreakdownRow>
-                size="small"
-                rowKey={(r) =>
-                  `${r.canon_label ?? "__null__"}|${r.canon_sub_label ?? "__null__"}`
-                }
-                dataSource={metrics.by_sub_label}
-                pagination={false}
-                columns={[
-                  {
-                    title: "Label",
-                    dataIndex: "canon_label",
-                    render: (s: string | null) => (
-                      <code>{labelOrDash(s)}</code>
-                    ),
-                  },
-                  {
-                    title: "Sub label",
-                    dataIndex: "canon_sub_label",
-                    render: (s: string | null) => (
-                      <code>{labelOrDash(s)}</code>
-                    ),
-                  },
-                  {
-                    title: "Pass rate",
-                    width: 110,
-                    align: "right",
-                    render: (_: unknown, r: LabelBreakdownRow) =>
-                      fmtPct(r.n > 0 ? r.pass / r.n : null),
-                  },
-                  {
-                    title: "n",
-                    dataIndex: "n",
-                    width: 60,
-                    align: "right",
-                  },
-                  {
-                    title: "Pass",
-                    dataIndex: "pass",
-                    width: 70,
-                    align: "right",
-                  },
-                  {
-                    title: "Régressions",
-                    dataIndex: "regression",
-                    width: 110,
-                    align: "right",
-                    render: (n: number) =>
-                      n > 0 ? (
-                        <span style={{ color: "#d48806" }}>{n}</span>
-                      ) : (
-                        n
-                      ),
-                  },
-                  {
-                    title: "Drift majoritaire",
-                    dataIndex: "drift_to",
-                    render: (s: string | null) =>
-                      s ? <code>{s}</code> : "—",
-                  },
-                ]}
+              <Statistic
+                title="Skipped"
+                value={metrics.n_skipped}
+                valueStyle={{ color: "#999" }}
               />
-            </div>
-          )}
-        </Space>
-      )}
+              <Statistic
+                title="Erreurs"
+                value={metrics.n_error}
+                valueStyle={{
+                  color: metrics.n_error > 0 ? "#cf1322" : undefined,
+                }}
+              />
+              <Statistic
+                title="Analyses"
+                value={`${metrics.n_total} / ${batch.input_count}`}
+              />
+            </Space>
+          </Space>
+        );
+      })()}
 
       <div>
         <Typography.Title level={4} style={{ marginBottom: 4 }}>
