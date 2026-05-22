@@ -116,6 +116,14 @@ All LGM Skills are available at:
 
 ---
 
+### Build an audience from a LinkedIn post's likers or commenters
+
+**You:** "Create an audience called 'AI Webinar — Engaged' with everyone who commented on this LinkedIn post: https://www.linkedin.com/posts/..."
+
+**AI:** Calls `list_identities` to resolve your identity, then `create_audience_from_linkedin_post_commenters` to scrape the comment authors and import them. Use `create_audience_from_linkedin_post_likers` to capture the likers instead.
+
+---
+
 ### Audit your outreach sequence before launch
 
 **You:** "Show me the message flow for my 'DACH Enterprise' campaign — I want to check the timing and content before it goes live."
