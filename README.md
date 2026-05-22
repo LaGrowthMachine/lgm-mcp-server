@@ -47,6 +47,9 @@ Get the complete message history for any lead across all channels (email + Linke
 **Track engagement activity**
 View all actions taken on a lead: connection requests sent, messages delivered, replies received, follow-ups triggered.
 
+**Build audiences from a LinkedIn URL**
+Drop in a LinkedIn search, Sales Navigator search, or LinkedIn post URL — your AI creates the audience and triggers the lead import in one shot.
+
 **Personalize AI-generated outreach**
 Save tone and style preferences per La Growth Machine identity, so your AI generates on-brand messages that match your voice.
 
@@ -105,6 +108,14 @@ All LGM Skills are available at:
 
 ---
 
+### Build an audience straight from a Sales Nav URL
+
+**You:** "Create a new audience called 'DACH VPs of Sales' from this Sales Nav search — use my main LinkedIn identity. Here's the URL: https://www.linkedin.com/sales/search/people?..."
+
+**AI:** Calls `list_identities` to resolve your main identity, then `create_audience_from_linkedin_url` to kick off the import. The import runs asynchronously — list your audiences and check progress with `get_audience`.
+
+---
+
 ### Audit your outreach sequence before launch
 
 **You:** "Show me the message flow for my 'DACH Enterprise' campaign — I want to check the timing and content before it goes live."
@@ -128,6 +139,8 @@ All LGM Skills are available at:
 | `get_lead_conversations` | All conversation threads with a lead |
 | `get_conversation_messages` | Complete message thread in a conversation |
 | `save_identity_preference` | Save tone/language/style for AI-generated content |
+| `create_audience_from_linkedin_url` | Create or populate an audience from a LinkedIn / Sales Nav search or post URL |
+| `list_identities` | List your connected LinkedIn / email identities — needed to pick an `identityId` |
 | `explore_db` | Admin-only: natural-language MongoDB exploration via server-side agent |
 
 ---

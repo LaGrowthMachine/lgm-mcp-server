@@ -83,6 +83,14 @@
       "description": "Save a preference for an identity to personalize AI-generated content."
     },
     {
+      "name": "create_audience_from_linkedin_url",
+      "description": "Create or populate an audience from a LinkedIn search, Sales Navigator search, or LinkedIn post URL."
+    },
+    {
+      "name": "list_identities",
+      "description": "List all connected identities (LinkedIn / email) for the authenticated user."
+    },
+    {
       "name": "explore_db",
       "description": "Explore the LGM MongoDB with a natural-language brief (admin only @lagrowthmachine.com). Server-side agent runs read-only queries via a validated AST proxy."
     }

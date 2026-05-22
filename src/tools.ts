@@ -409,7 +409,108 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  // Tool 10: analyze_conversation (Tier 2 — server-side inference)
+  // Tool 10: create_audience_from_linkedin_url
+  server.registerTool(
+    "create_audience_from_linkedin_url",
+    {
+      description:
+        "Create a new audience (or populate an existing one) by importing leads from a LinkedIn Regular search URL, a Sales Navigator search URL, or a LinkedIn post URL. The `audience` parameter is a NAME, not an ID — if no audience with that name exists, LGM creates one; if it does, leads are added to it. Requires an `identityId` from list_identities; the underlying LinkedIn account must be connected and the LGM widget open during the import. Import runs asynchronously — poll get_audience to check status.",
+      inputSchema: {
+        audience: z
+          .string()
+          .min(1)
+          .max(100)
+          .describe(
+            "Name (not ID) of the audience to populate. Creates it if it doesn't exist.",
+          ),
+        linkedinUrl: z
+          .string()
+          .url()
+          .regex(
+            /^https:\/\/(www\.)?linkedin\.com\//,
+            "A valid LinkedIn URL is required (must start with https://www.linkedin.com/)",
+          )
+          .describe(
+            "LinkedIn Regular search URL, Sales Navigator search URL, or LinkedIn post URL",
+          ),
+        identityId: z
+          .string()
+          .describe(
+            "Identity to impersonate for the scrape (24-character hex ObjectId). Use list_identities to find it.",
+          ),
+        linkedinPostCategory: z
+          .enum(["like", "comment"])
+          .optional()
+          .describe(
+            "When linkedinUrl is a LinkedIn post, scrape leads by engagement type: 'like' or 'comment'",
+          ),
+        excludeContactedLeads: z
+          .boolean()
+          .optional()
+          .describe("Exclude leads who have already been contacted"),
+        autoImport: z
+          .boolean()
+          .optional()
+          .describe("Auto-import new matching leads going forward"),
+      },
+      annotations: {
+        title: "Create Audience from LinkedIn URL",
+        destructiveHint: false,
+      },
+    },
+    async (params, extra) => {
+      const apiKey = resolveApiKey(extra);
+      try {
+        const data = await callFlow(
+          apiKey,
+          "/audiences",
+          {
+            audience: params.audience,
+            linkedinUrl: params.linkedinUrl,
+            identityId: params.identityId,
+            linkedinPostCategory: params.linkedinPostCategory,
+            excludeContactedLeads: params.excludeContactedLeads,
+            autoImport: params.autoImport,
+          },
+          { method: "POST" },
+        );
+        await trackMcpEvent(apiKey, "mcp_tool_called", {
+          toolName: "create_audience_from_linkedin_url",
+        });
+        return formatTextContent("Audience Created", data);
+      } catch (error) {
+        return handleToolError(error);
+      }
+    },
+  );
+
+  // Tool 11: list_identities
+  server.registerTool(
+    "list_identities",
+    {
+      description:
+        "List all connected identities (LinkedIn / email accounts) for the authenticated user. Use the returned identity IDs to call tools that require an `identityId`, like create_audience_from_linkedin_url.",
+      inputSchema: {},
+      annotations: {
+        title: "List Identities",
+        readOnlyHint: true,
+      },
+    },
+    async (_params, extra) => {
+      const apiKey = resolveApiKey(extra);
+      try {
+        const data = await callFlow(apiKey, "/identities");
+        await trackMcpEvent(apiKey, "mcp_tool_called", {
+          toolName: "list_identities",
+        });
+        return formatTextContent("Identities", data);
+      } catch (error) {
+        return handleToolError(error);
+      }
+    },
+  );
+
+  // Tool 12: analyze_conversation (Tier 2 — server-side inference)
   server.registerTool(
     "analyze_conversation",
     {
@@ -450,7 +551,7 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  // Tool 11: explore_db (admin-only — server-side Anthropic agent over MongoDB)
+  // Tool 13: explore_db (admin-only — server-side Anthropic agent over MongoDB)
   server.registerTool(
     "explore_db",
     {
@@ -522,5 +623,4 @@ export const registerTools = (server: McpServer) => {
       }
     },
   );
-
 };
