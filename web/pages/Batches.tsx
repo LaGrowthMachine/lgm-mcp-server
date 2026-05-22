@@ -166,7 +166,9 @@ export function Batches() {
             title: "date",
             dataIndex: "created_at",
             width: 170,
-            render: (v: string) => fmtDateTime(v),
+            render: (v: string, r: BatchListItem) => (
+              <Link to={`/batches/${r.id}`}>{fmtDateTime(v)}</Link>
+            ),
           },
           {
             title: "source",
@@ -227,9 +229,9 @@ export function Batches() {
               n > 0 ? <Tag color="error">{n}</Tag> : "—",
           },
           {
-            // Cellule compacte : coût en gras + total tokens en gris dessous.
+            // Cellule compacte : coût total en gras + total tokens en gris dessous.
             // NULL ⇒ "—" sur 1 ligne pour les batchs legacy ou sans tokens.
-            title: "coût",
+            title: "coût total",
             width: 110,
             align: "right",
             render: (_: unknown, r: BatchListItem) => {
@@ -250,19 +252,24 @@ export function Batches() {
             },
           },
           {
+            // Coût moyen par analyse facturée — exclut les ignorées (qui n'ont
+            // appelé aucune inférence et restent cost NULL). Donne un indicateur
+            // stable du coût marginal d'une conv réellement classifiée.
+            title: "coût moyen",
+            width: 100,
+            align: "right",
+            render: (_: unknown, r: BatchListItem) => {
+              const denom = r.n_total - r.n_skipped;
+              const avg =
+                r.cost_usd !== null && denom > 0 ? r.cost_usd / denom : null;
+              return fmtCost(avg);
+            },
+          },
+          {
             title: "statut",
             dataIndex: "status",
             width: 100,
             render: statusTag,
-          },
-          {
-            title: "",
-            width: 90,
-            render: (_: unknown, r: BatchListItem) => (
-              <Link to={`/batches/${r.id}`}>
-                <Button size="small">Ouvrir</Button>
-              </Link>
-            ),
           },
         ]}
       />
