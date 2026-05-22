@@ -57,7 +57,7 @@ const registerPostEngagementTool = (
   server.registerTool(
     config.name,
     {
-      description: `Create a new audience (or populate an existing one) with the people who ${config.engagementClause} a specific LinkedIn post. Use this when the user wants to import ${config.engagementNoun}. The \`audience\` parameter is a NAME, not an ID — if no audience with that name exists, LGM creates one; if it does, leads are added to it. Requires an \`identityId\` from list_identities; the underlying LinkedIn account must be connected and the LGM widget open during the import. Import runs asynchronously — poll get_audience to check status.`,
+      description: `Create a new audience (or populate an existing one) with the people who ${config.engagementClause} a specific LinkedIn post. Use this when the user wants to import ${config.engagementNoun}. Set \`autoImport: true\` when the user wants to keep capturing new ${config.engagementNoun} as they engage with the post going forward (e.g. "keep adding new ${config.engagementNoun}", "monitor this post"). The \`audience\` parameter is a NAME, not an ID — if no audience with that name exists, LGM creates one; if it does, leads are added to it. Requires an \`identityId\` from list_identities; the underlying LinkedIn account must be connected and the LGM widget open during the import. Import runs asynchronously — poll get_audience to check status.`,
       inputSchema: {
         audience: z
           .string()
@@ -85,6 +85,12 @@ const registerPostEngagementTool = (
           .boolean()
           .optional()
           .describe("Exclude leads who have already been contacted"),
+        autoImport: z
+          .boolean()
+          .optional()
+          .describe(
+            `Keep importing new ${config.engagementNoun} as they engage with the post going forward. Use when the user wants ongoing monitoring of the post, not just a one-shot snapshot.`,
+          ),
       },
       annotations: {
         title: config.title,
@@ -103,6 +109,7 @@ const registerPostEngagementTool = (
             identityId: params.identityId,
             linkedinPostCategory: config.category,
             excludeContactedLeads: params.excludeContactedLeads,
+            autoImport: params.autoImport,
           },
           { method: "POST" },
         );
