@@ -420,6 +420,10 @@ export const registerTools = (server: McpServer) => {
         linkedinUrl: z
           .string()
           .url()
+          .regex(
+            /^https:\/\/(www\.)?linkedin\.com\//,
+            "A valid LinkedIn URL is required (must start with https://www.linkedin.com/)",
+          )
           .describe(
             "LinkedIn Regular search URL, Sales Navigator search URL, or LinkedIn post URL",
           ),
@@ -445,7 +449,7 @@ export const registerTools = (server: McpServer) => {
       },
       annotations: {
         title: "Create Audience from LinkedIn URL",
-        destructiveHint: true,
+        destructiveHint: false,
       },
     },
     async (params, extra) => {

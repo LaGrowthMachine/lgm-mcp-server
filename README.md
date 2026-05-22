@@ -112,7 +112,7 @@ All LGM Skills are available at:
 
 **You:** "Create a new audience called 'DACH VPs of Sales' from this Sales Nav search — use my main LinkedIn identity. Here's the URL: https://www.linkedin.com/sales/search/people?..."
 
-**AI:** Calls `list_identities` to resolve your main identity, then `create_audience_from_linkedin_url` to kick off the import. Returns the new audience ID so you can wire it into a campaign — and you can check progress later with `get_audience`.
+**AI:** Calls `list_identities` to resolve your main identity, then `create_audience_from_linkedin_url` to kick off the import. The import runs asynchronously — list your audiences and check progress with `get_audience`.
 
 ---
 
