@@ -133,6 +133,7 @@ All LGM Skills are available at:
 | `list_campaigns` | List and filter campaigns by status, name, or date |
 | `get_campaign_stats` | Acceptance rate, reply rate, conversions, and more |
 | `get_campaign_messages` | Full message sequence with content and channel order |
+| `list_audiences` | List all your audiences with their `id`, `name`, and `leadsCount` |
 | `get_audience` | Audience name, size, type, and import status |
 | `get_audience_leads` | Leads list with name, company, role, email, LinkedIn |
 | `get_lead_logs` | Full activity history for a lead across all channels |
