@@ -140,6 +140,8 @@ All LGM Skills are available at:
 | `get_conversation_messages` | Complete message thread in a conversation |
 | `save_identity_preference` | Save tone/language/style for AI-generated content |
 | `create_audience_from_linkedin_url` | Create or populate an audience from a LinkedIn / Sales Nav search or post URL |
+| `create_audience_from_linkedin_post_likers` | Create or populate an audience with the people who liked a LinkedIn post |
+| `create_audience_from_linkedin_post_commenters` | Create or populate an audience with the people who commented on a LinkedIn post |
 | `list_identities` | List your connected LinkedIn / email identities — needed to pick an `identityId` |
 
 ---

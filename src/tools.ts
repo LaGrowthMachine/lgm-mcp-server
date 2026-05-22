@@ -478,7 +478,143 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  // Tool 11: list_identities
+  // Tool 11: create_audience_from_linkedin_post_likers
+  server.registerTool(
+    "create_audience_from_linkedin_post_likers",
+    {
+      description:
+        "Create a new audience (or populate an existing one) with the people who LIKED a specific LinkedIn post. Use this when the user wants to import likers / people who reacted to a post. The `audience` parameter is a NAME, not an ID — if no audience with that name exists, LGM creates one; if it does, leads are added to it. Requires an `identityId` from list_identities; the underlying LinkedIn account must be connected and the LGM widget open during the import. Import runs asynchronously — poll get_audience to check status.",
+      inputSchema: {
+        audience: z
+          .string()
+          .min(1)
+          .max(100)
+          .describe(
+            "Name (not ID) of the audience to populate. Creates it if it doesn't exist.",
+          ),
+        linkedinUrl: z
+          .string()
+          .url()
+          .regex(
+            /^https:\/\/(www\.)?linkedin\.com\//,
+            "A valid LinkedIn post URL is required (must start with https://www.linkedin.com/)",
+          )
+          .describe("URL of the LinkedIn post whose likers should be imported"),
+        identityId: z
+          .string()
+          .describe(
+            "Identity to impersonate for the scrape (24-character hex ObjectId). Use list_identities to find it.",
+          ),
+        excludeContactedLeads: z
+          .boolean()
+          .optional()
+          .describe("Exclude leads who have already been contacted"),
+        autoImport: z
+          .boolean()
+          .optional()
+          .describe("Auto-import new likers going forward"),
+      },
+      annotations: {
+        title: "Create Audience from LinkedIn Post Likers",
+        destructiveHint: false,
+      },
+    },
+    async (params, extra) => {
+      const apiKey = resolveApiKey(extra);
+      try {
+        const data = await callFlow(
+          apiKey,
+          "/audiences",
+          {
+            audience: params.audience,
+            linkedinUrl: params.linkedinUrl,
+            identityId: params.identityId,
+            linkedinPostCategory: "like",
+            excludeContactedLeads: params.excludeContactedLeads,
+            autoImport: params.autoImport,
+          },
+          { method: "POST" },
+        );
+        await trackMcpEvent(apiKey, "mcp_tool_called", {
+          toolName: "create_audience_from_linkedin_post_likers",
+        });
+        return formatTextContent("Audience Created", data);
+      } catch (error) {
+        return handleToolError(error);
+      }
+    },
+  );
+
+  // Tool 12: create_audience_from_linkedin_post_commenters
+  server.registerTool(
+    "create_audience_from_linkedin_post_commenters",
+    {
+      description:
+        "Create a new audience (or populate an existing one) with the people who COMMENTED on a specific LinkedIn post. Use this when the user wants to import commenters / people who engaged in the comments. The `audience` parameter is a NAME, not an ID — if no audience with that name exists, LGM creates one; if it does, leads are added to it. Requires an `identityId` from list_identities; the underlying LinkedIn account must be connected and the LGM widget open during the import. Import runs asynchronously — poll get_audience to check status.",
+      inputSchema: {
+        audience: z
+          .string()
+          .min(1)
+          .max(100)
+          .describe(
+            "Name (not ID) of the audience to populate. Creates it if it doesn't exist.",
+          ),
+        linkedinUrl: z
+          .string()
+          .url()
+          .regex(
+            /^https:\/\/(www\.)?linkedin\.com\//,
+            "A valid LinkedIn post URL is required (must start with https://www.linkedin.com/)",
+          )
+          .describe(
+            "URL of the LinkedIn post whose commenters should be imported",
+          ),
+        identityId: z
+          .string()
+          .describe(
+            "Identity to impersonate for the scrape (24-character hex ObjectId). Use list_identities to find it.",
+          ),
+        excludeContactedLeads: z
+          .boolean()
+          .optional()
+          .describe("Exclude leads who have already been contacted"),
+        autoImport: z
+          .boolean()
+          .optional()
+          .describe("Auto-import new commenters going forward"),
+      },
+      annotations: {
+        title: "Create Audience from LinkedIn Post Commenters",
+        destructiveHint: false,
+      },
+    },
+    async (params, extra) => {
+      const apiKey = resolveApiKey(extra);
+      try {
+        const data = await callFlow(
+          apiKey,
+          "/audiences",
+          {
+            audience: params.audience,
+            linkedinUrl: params.linkedinUrl,
+            identityId: params.identityId,
+            linkedinPostCategory: "comment",
+            excludeContactedLeads: params.excludeContactedLeads,
+            autoImport: params.autoImport,
+          },
+          { method: "POST" },
+        );
+        await trackMcpEvent(apiKey, "mcp_tool_called", {
+          toolName: "create_audience_from_linkedin_post_commenters",
+        });
+        return formatTextContent("Audience Created", data);
+      } catch (error) {
+        return handleToolError(error);
+      }
+    },
+  );
+
+  // Tool 13: list_identities
   server.registerTool(
     "list_identities",
     {
