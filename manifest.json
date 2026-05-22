@@ -81,6 +81,14 @@
     {
       "name": "save_identity_preference",
       "description": "Save a preference for an identity to personalize AI-generated content."
+    },
+    {
+      "name": "create_audience_from_linkedin_url",
+      "description": "Create or populate an audience from a LinkedIn search, Sales Navigator search, or LinkedIn post URL."
+    },
+    {
+      "name": "list_identities",
+      "description": "List all connected identities (LinkedIn / email) for the authenticated user."
     }
   ],
   "keywords": [
