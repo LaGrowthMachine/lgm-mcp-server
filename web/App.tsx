@@ -8,6 +8,7 @@ import {
   FileTextOutlined,
   SettingOutlined,
   ThunderboltOutlined,
+  ApiOutlined,
 } from "@ant-design/icons";
 import {
   Routes,
@@ -25,6 +26,7 @@ import { RepliesList } from "./pages/RepliesList";
 import { ConversationDetail } from "./pages/ConversationDetail";
 import { Prompts } from "./pages/Prompts";
 import { Models } from "./pages/Models";
+import { Endpoints } from "./pages/Endpoints";
 import { Settings } from "./pages/Settings";
 import { LGM_COLORS } from "./theme";
 
@@ -38,6 +40,7 @@ const NAV = [
   { key: "/replies", icon: <CommentOutlined />, label: "Réponses" },
   { key: "/prompts", icon: <FileTextOutlined />, label: "Prompts" },
   { key: "/models", icon: <ThunderboltOutlined />, label: "Modèles" },
+  { key: "/endpoints", icon: <ApiOutlined />, label: "Endpoints MCP" },
   { key: "/settings", icon: <SettingOutlined />, label: "Réglages" },
 ];
 
@@ -175,6 +178,7 @@ export function Shell() {
               <Route path="/replies" element={<RepliesList />} />
               <Route path="/prompts" element={<Prompts />} />
               <Route path="/models" element={<Models />} />
+              <Route path="/endpoints" element={<Endpoints />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
           </div>

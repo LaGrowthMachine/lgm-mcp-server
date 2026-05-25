@@ -255,3 +255,103 @@ export interface DefaultModelResp {
   modelId: string | null;
   model: Model | null;
 }
+
+// ---------- MCP endpoints registry (admin) ----------
+// Admin view: all rows incl. inactive/private. The MCP runtime uses a
+// separate server route filtered on active+public.
+export type EndpointType = "proxy" | "builtin";
+
+// Mirror of `BUILTIN_HANDLERS` in src/endpoints/types.ts. The two bundles
+// don't share a rootDir; keep both arrays in sync. Adding a handler here AND
+// in the server-side array is required for it to be selectable from the form.
+export const BUILTIN_HANDLERS = [
+  "analyze_conversation",
+  "explore_db",
+] as const;
+export type BuiltinHandler = (typeof BUILTIN_HANDLERS)[number];
+
+export interface EndpointRow {
+  id: string;
+  name: string;
+  type: EndpointType;
+  description: string | null;
+  is_active: boolean;
+  is_public: boolean;
+  config: unknown;
+  created_at: string;
+  updated_at: string;
+}
+
+export const listEndpoints = async (): Promise<EndpointRow[]> =>
+  http.get<EndpointRow[]>("/endpoints").then((r) => r.data);
+
+export const patchEndpointFlags = async (
+  id: string,
+  flags: { is_active?: boolean; is_public?: boolean },
+): Promise<EndpointRow> =>
+  http.patch<EndpointRow>(`/endpoints/${id}/flags`, flags).then((r) => r.data);
+
+// Flag changes go through PATCH /flags; this payload is for the full CRUD.
+// Input refinements (enum/pattern/format/min/max) are round-tripped even when
+// the form has no dedicated control for them — editing a row that carries
+// them shouldn't lose them.
+export interface EndpointInputConfigInput {
+  name: string;
+  kind: "string" | "number" | "boolean";
+  optional?: boolean;
+  default?: unknown;
+  describe: string;
+  enum?: string[];
+  pattern?: string;
+  pattern_message?: string;
+  format?: "url";
+  min?: number;
+  max?: number;
+}
+
+export interface ProxyEndpointConfig {
+  method: "GET" | "POST";
+  path: string;
+  label?: string;
+  title?: string;
+  tracking_event?: string;
+  destructive_hint?: boolean;
+  inputs: EndpointInputConfigInput[];
+}
+
+export interface BuiltinEndpointConfig {
+  handler: BuiltinHandler;
+  label?: string;
+  title?: string;
+  tracking_event?: string;
+  inputs: EndpointInputConfigInput[];
+}
+
+export type EndpointInput =
+  | {
+      name: string;
+      type: "proxy";
+      description?: string | null;
+      config: ProxyEndpointConfig;
+    }
+  | {
+      name: string;
+      type: "builtin";
+      description?: string | null;
+      config: BuiltinEndpointConfig;
+    };
+
+export const createEndpoint = async (
+  input: EndpointInput,
+): Promise<EndpointRow> =>
+  http.post<EndpointRow>("/endpoints", input).then((r) => r.data);
+
+export const updateEndpoint = async (
+  id: string,
+  input: EndpointInput,
+): Promise<EndpointRow> =>
+  http.put<EndpointRow>(`/endpoints/${id}`, input).then((r) => r.data);
+
+export const deleteEndpoint = async (id: string): Promise<void> => {
+  await http.delete(`/endpoints/${id}`);
+};

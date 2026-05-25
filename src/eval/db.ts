@@ -37,11 +37,19 @@ export const CODE_DEFAULT_PROMPT_NAME = CONVERSATION_CLASSIFIER_VERSION; // "v1"
 
 let pool: Pool | null = null;
 export const getPool = (): Pool => {
-  if (!pool)
+  if (!pool) {
     pool = new Pool({
       connectionString: CONN,
       ssl: isLocalPg ? undefined : { rejectUnauthorized: false },
     });
+    // Sans ce listener, une erreur sur un client idle (ex : Postgres tue la
+    // connexion en cas de shutdown / kill) remonte en `uncaughtException` et
+    // crashe le process. Le `/mcp` per-request handler catche déjà les
+    // erreurs de QUERY ; on veut juste éviter le crash en backgound.
+    pool.on("error", (err) => {
+      console.error("[pg] pool idle client error:", err.message);
+    });
+  }
   return pool;
 };
 
@@ -294,6 +302,27 @@ export const ensureSchema = async (): Promise<void> => {
     }
   }
 
+  // MCP endpoints registry. One row = one MCP tool, typed by `type`
+  // (proxy | builtin). `config` is a JSONB blob constrained by a Zod schema
+  // per type (see src/endpoints/types.ts). The common columns (name, type,
+  // is_active, is_public, description) are the stable shell; everything
+  // type-specific lives in `config`.
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS endpoints (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name        TEXT UNIQUE NOT NULL,
+      type        TEXT NOT NULL,
+      description TEXT,
+      is_active   BOOLEAN NOT NULL DEFAULT true,
+      is_public   BOOLEAN NOT NULL DEFAULT true,
+      config      JSONB NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS endpoints_active_public
+      ON endpoints (name) WHERE is_active AND is_public;
+  `);
+
   // Seed par famille : défaut analysis (classifier) + défaut reply (playbook
   // DG), chacun actif si sa famille est vide.
   const seed = async (
@@ -320,6 +349,10 @@ export const ensureSchema = async (): Promise<void> => {
     CODE_DEFAULT_REPLY_PROMPT_NAME,
     CODE_DEFAULT_REPLY_PROMPT_BODY,
   );
+
+  // Endpoint seeding lives outside the app: `scripts/seed-endpoints.sql`
+  // (run via `npm run seed:endpoints`). The DB is the source of truth and
+  // deletions are permanent.
 };
 
 // ---------- prompts ----------
@@ -1618,4 +1651,177 @@ export const resolveEffectiveModelId = async (
     );
   }
   return { uuid: m.id, awsModelId: m.aws_model_id };
+};
+
+// =============================================================================
+// Endpoints registry
+// =============================================================================
+
+export interface EndpointRow {
+  id: string;
+  name: string;
+  type: string;
+  description: string | null;
+  is_active: boolean;
+  is_public: boolean;
+  config: unknown;
+  created_at: string;
+  updated_at: string;
+}
+
+// Cast timestamps to text so pg returns ISO strings (rather than Date
+// objects) — keeps the JSON payload stable.
+const selectEndpointCols = `id::text AS id, name, type, description, is_active,
+  is_public, config, created_at::text AS created_at,
+  updated_at::text AS updated_at`;
+
+// MCP runtime view: active + public, sorted by name (stable `tools/list`
+// between boots — useful for regression diffs).
+export const listEndpoints = async (): Promise<EndpointRow[]> => {
+  const { rows } = await getPool().query<EndpointRow>(
+    `SELECT ${selectEndpointCols}
+       FROM endpoints
+      WHERE is_active = true AND is_public = true
+      ORDER BY name ASC`,
+  );
+  return rows;
+};
+
+// Admin view: every row, including inactive/private. The active+public
+// filter stays reserved for the MCP runtime — the UI needs full state to
+// toggle.
+export const listAllEndpoints = async (): Promise<EndpointRow[]> => {
+  const { rows } = await getPool().query<EndpointRow>(
+    `SELECT ${selectEndpointCols}
+       FROM endpoints
+      ORDER BY name ASC`,
+  );
+  return rows;
+};
+
+// Admin flag toggle. UPDATE … RETURNING * — no cache mutation, no SDK call:
+// the next /mcp request reads the DB and sees the change. Dynamic SET
+// pattern mirrors updateModel.
+export const updateEndpointFlags = async (
+  id: string,
+  flags: { is_active?: boolean; is_public?: boolean },
+): Promise<EndpointRow | null> => {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  if (flags.is_active !== undefined) {
+    values.push(flags.is_active);
+    fields.push(`is_active = $${values.length}`);
+  }
+  if (flags.is_public !== undefined) {
+    values.push(flags.is_public);
+    fields.push(`is_public = $${values.length}`);
+  }
+  if (fields.length === 0) return null;
+  fields.push(`updated_at = now()`);
+  values.push(id);
+  const { rows } = await getPool().query<EndpointRow>(
+    `UPDATE endpoints SET ${fields.join(", ")}
+      WHERE id = $${values.length}
+      RETURNING ${selectEndpointCols}`,
+    values,
+  );
+  return rows[0] ?? null;
+};
+
+// Thrown by createEndpoint/updateEndpoint when the UNIQUE(name) constraint
+// is violated. The route layer maps it to a 409 Conflict.
+export class EndpointNameConflictError extends Error {
+  constructor(name: string) {
+    super(`endpoint name already exists: ${name}`);
+    this.name = "EndpointNameConflictError";
+  }
+}
+
+const isUniqueViolation = (
+  e: unknown,
+): e is { code: string } =>
+  !!e && typeof e === "object" && (e as { code?: unknown }).code === "23505";
+
+export interface EndpointWriteInput {
+  name: string;
+  type: string;
+  description?: string | null;
+  config: unknown;
+}
+
+export const getEndpoint = async (
+  id: string,
+): Promise<EndpointRow | null> => {
+  const { rows } = await getPool().query<EndpointRow>(
+    `SELECT ${selectEndpointCols} FROM endpoints WHERE id = $1`,
+    [id],
+  );
+  return rows[0] ?? null;
+};
+
+// Create a row from the admin UI. Flags default to true/true; toggling them
+// goes through PATCH /flags. Catches 23505 → EndpointNameConflictError so
+// the route can map it to 409.
+export const createEndpoint = async (
+  input: EndpointWriteInput,
+): Promise<EndpointRow> => {
+  try {
+    const { rows } = await getPool().query<EndpointRow>(
+      `INSERT INTO endpoints (name, type, description, config)
+       VALUES ($1, $2, $3, $4::jsonb)
+       RETURNING ${selectEndpointCols}`,
+      [
+        input.name,
+        input.type,
+        input.description ?? null,
+        JSON.stringify(input.config ?? {}),
+      ],
+    );
+    return rows[0];
+  } catch (e) {
+    if (isUniqueViolation(e)) throw new EndpointNameConflictError(input.name);
+    throw e;
+  }
+};
+
+// Full update from the admin UI. Does NOT touch flags (dedicated route).
+// Updates name, type, description, config, updated_at. Returns null if the
+// row doesn't exist.
+export const updateEndpoint = async (
+  id: string,
+  input: EndpointWriteInput,
+): Promise<EndpointRow | null> => {
+  try {
+    const { rows } = await getPool().query<EndpointRow>(
+      `UPDATE endpoints
+          SET name = $1,
+              type = $2,
+              description = $3,
+              config = $4::jsonb,
+              updated_at = now()
+        WHERE id = $5
+        RETURNING ${selectEndpointCols}`,
+      [
+        input.name,
+        input.type,
+        input.description ?? null,
+        JSON.stringify(input.config ?? {}),
+        id,
+      ],
+    );
+    return rows[0] ?? null;
+  } catch (e) {
+    if (isUniqueViolation(e)) throw new EndpointNameConflictError(input.name);
+    throw e;
+  }
+};
+
+// Hard delete — no soft delete. To re-seed the initial rows on a fresh env,
+// run `npm run seed:endpoints` (idempotent ON CONFLICT (name)).
+export const deleteEndpoint = async (id: string): Promise<boolean> => {
+  const { rowCount } = await getPool().query(
+    `DELETE FROM endpoints WHERE id = $1`,
+    [id],
+  );
+  return (rowCount ?? 0) > 0;
 };

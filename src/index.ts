@@ -5,29 +5,35 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { IncomingMessage } from "node:http";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
-import { createMcpServer } from "./server";
+import { MCP_SERVER_INFO, MCP_SERVER_OPTIONS } from "./server";
+import { registerFromRow } from "./endpoints/registry";
 import { requestContext, isAllowedApiUrl, getApiUrl } from "./requestContext";
 import oauthRouter from "./oauth";
 import { evalRouter } from "./eval/routes";
-import { ensureSchema } from "./eval/db";
+import { ensureSchema, listEndpoints } from "./eval/db";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
-const TRANSPORT = process.env.LGM_MCP_TRANSPORT || "http";
 
-// Basic Auth navigateur SCOPPÉ à la web app d'éval (/eval + /api/eval)
-// uniquement. /mcp, /health, /oauth, /.well-known restent OUVERTS — sinon
-// on casse tous les clients MCP et les probes Heroku. Identifiants via
-// config vars (défauts demandés : lgm / tech@env25).
-// Actif uniquement sur Heroku (variable DYNO présente sur les dynos) — JAMAIS
-// en dev local. Forçable via EVAL_BASIC_AUTH=1 si besoin de tester le gate.
+// Basic Auth scoped to the eval web app (/eval + /api/eval) only — /mcp,
+// /health, /oauth, /.well-known stay open so MCP clients and Heroku probes
+// aren't broken. Active on Heroku (DYNO env var) only, never in local dev.
+// EVAL_BASIC_AUTH=1 forces it on for local testing.
 const EVAL_AUTH_ENABLED =
   !!process.env.DYNO || process.env.EVAL_BASIC_AUTH === "1";
 const EVAL_AUTH_USER = process.env.EVAL_BASIC_AUTH_USER || "lgm";
-const EVAL_AUTH_PASS = process.env.EVAL_BASIC_AUTH_PASS || "tech@env25";
+const EVAL_AUTH_PASS = process.env.EVAL_BASIC_AUTH_PASS || "";
+if (EVAL_AUTH_ENABLED && !EVAL_AUTH_PASS) {
+  // Fail-fast: a missing password would otherwise default to "" and accept
+  // any client sending the `lgm:` Basic header. Refuse to boot instead.
+  console.error(
+    "[boot] EVAL_BASIC_AUTH_PASS is required when eval auth is enabled (DYNO set or EVAL_BASIC_AUTH=1)",
+  );
+  process.exit(1);
+}
 
 const safeEq = (a: string, b: string): boolean => {
   const ab = Buffer.from(a);
@@ -60,21 +66,70 @@ const evalBasicAuth = (
     .send("Authentication required");
 };
 
+// Hard timeout for the DB bootstrap. A Postgres in a network black hole
+// (vs. cleanly refused) could otherwise hang `ensureSchema` indefinitely and
+// block dyno boot. The HTTP boot is not dependent on the registry — it only
+// seeds the schema; tool listings are per-request DB reads.
+const BOOTSTRAP_DB_TIMEOUT_MS = 15000;
+
+const bootstrapHttpSchema = async (): Promise<void> => {
+  try {
+    await Promise.race([
+      ensureSchema(),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                `ensureSchema timed out after ${BOOTSTRAP_DB_TIMEOUT_MS}ms`,
+              ),
+            ),
+          BOOTSTRAP_DB_TIMEOUT_MS,
+        ),
+      ),
+    ]);
+    console.error("[boot] ensureSchema ok");
+  } catch (e) {
+    console.error(
+      "[boot] ensureSchema failed/timed out — /mcp will retry per-request:",
+      e,
+    );
+  }
+};
+
+// Build a fresh McpServer per HTTP request: read endpoints from the DB
+// (no cache — explicit tradeoff against complexity) and register the valid
+// rows. If the DB is unreachable, no tools are served — fail-loud rather
+// than diverging from the DB source of truth.
+//
+// SDK constraint: `McpServer.connect(transport)` doesn't support re-binding
+// the same server to a new transport ("Already connected to a transport"),
+// so 1 request = 1 server = 1 transport.
+const buildPerRequestServer = async (): Promise<McpServer> => {
+  const server = new McpServer(MCP_SERVER_INFO, MCP_SERVER_OPTIONS);
+  try {
+    const rows = await listEndpoints();
+    for (const row of rows) {
+      registerFromRow(server, row);
+    }
+  } catch (err) {
+    console.error(
+      "[endpoints] DB unavailable, no tools will be served:",
+      err,
+    );
+  }
+  return server;
+};
+
 const startHttpServer = async () => {
   const app = express();
 
-  // Outil d'éval (validation de prompt) servi par CE serveur — routing par
-  // path, zéro 2e système. API sous /api/eval (parser 4 Mo propre, monté
-  // AVANT le json global 100 Ko), UI React buildée servie en statique sous
-  // /eval. Le MCP (/mcp), /health, /oauth restent inchangés.
+  // Eval web app (validation harness) served by this same server — path-routed,
+  // no second process. API under /api/eval (parser 4 MB, mounted BEFORE the
+  // global 100 KB json parser); React build served statically under /eval.
+  // /mcp, /health, /oauth are untouched.
   app.use(["/api/eval", "/eval"], evalBasicAuth);
   app.use("/api/eval", evalRouter);
-  // Schéma + seed du prompt par défaut, non-bloquant : si Postgres est
-  // indisponible le MCP démarre quand même, seules les routes /api/eval
-  // répondront en erreur.
-  ensureSchema().catch((e) =>
-    console.error("[eval] ensureSchema KO (routes /api/eval dégradées):", e),
-  );
   const webDist = path.resolve(__dirname, "../web-dist");
   if (fs.existsSync(webDist)) {
     app.use("/eval", express.static(webDist));
@@ -166,11 +221,11 @@ const startHttpServer = async () => {
 
   const handleMcp = withRequestContext(
     async (req: express.Request, res: express.Response) => {
+      const server = await buildPerRequestServer();
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
 
-      const server = createMcpServer();
       await server.connect(transport);
 
       await transport.handleRequest(req, res, req.body);
@@ -190,6 +245,12 @@ const startHttpServer = async () => {
     console.log(`endpoint: ${getApiUrl()}`);
   });
 
+  // Schema seed runs after `listen()` so Heroku's health probe sees an open
+  // port immediately. Per-request /mcp handlers don't depend on this — they
+  // read endpoints from the DB at call time. This is best-effort: failures
+  // are logged in `bootstrapHttpSchema` itself.
+  void bootstrapHttpSchema();
+
   const shutdown = () => {
     httpServer.close(() => {
       process.exit(0);
@@ -204,27 +265,7 @@ const startHttpServer = async () => {
   process.on("SIGINT", shutdown);
 };
 
-const startStdioServer = async () => {
-  try {
-    console.error("[LGM] Starting stdio server...");
-    const server = createMcpServer();
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-    console.error("[LGM] Stdio server connected successfully");
-  } catch (error) {
-    console.error("[LGM] Stdio server error:", error);
-    process.exit(1);
-  }
-};
-
-if (TRANSPORT === "stdio") {
-  startStdioServer().catch((error) => {
-    console.error("Failed to start stdio server:", error);
-    process.exit(1);
-  });
-} else {
-  startHttpServer().catch((error) => {
-    console.error("Failed to start HTTP server:", error);
-    process.exit(1);
-  });
-}
+startHttpServer().catch((error) => {
+  console.error("Failed to start HTTP server:", error);
+  process.exit(1);
+});

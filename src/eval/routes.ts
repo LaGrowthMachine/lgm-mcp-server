@@ -5,6 +5,11 @@ import { analyzeConversationWithDbPrompt } from "./analyzer";
 import { generateReply } from "./replyGenerator";
 import { diffAnalyses, diffReplies } from "./diff";
 import * as db from "./db";
+import {
+  builtinConfigSchema,
+  proxyConfigSchema,
+  validateEndpointName,
+} from "../endpoints/types";
 
 const asKind = (v: unknown): db.PromptKind =>
   v === "reply" ? "reply" : "analysis";
@@ -824,5 +829,189 @@ evalRouter.put(
     }
     await db.setSetting(db.SETTING_DEFAULT_MODEL_ID, modelId);
     res.json({ modelId, model: m });
+  }),
+);
+
+// ---------- 7 · Registre des endpoints MCP (admin) ----------
+// Admin view of the registry: lists ALL rows (active + inactive + private) so
+// the UI can toggle is_active / is_public. The MCP runtime uses
+// `listEndpoints()` (filtered on active+public).
+evalRouter.get(
+  "/endpoints",
+  wrap(async (_req, res) => {
+    res.json(await db.listAllEndpoints());
+  }),
+);
+
+// Flag toggle. No cache mutation, no SDK call: the next /mcp request reads
+// the DB and sees the change.
+evalRouter.patch(
+  "/endpoints/:id/flags",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "id invalide" });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const raw_active = body.is_active;
+    const raw_public = body.is_public;
+    if (raw_active !== undefined && typeof raw_active !== "boolean") {
+      res.status(400).json({ error: "is_active must be a boolean" });
+      return;
+    }
+    if (raw_public !== undefined && typeof raw_public !== "boolean") {
+      res.status(400).json({ error: "is_public must be a boolean" });
+      return;
+    }
+    if (raw_active === undefined && raw_public === undefined) {
+      res
+        .status(400)
+        .json({ error: "at least one of is_active, is_public must be provided" });
+      return;
+    }
+    const updated = await db.updateEndpointFlags(id, {
+      is_active: raw_active,
+      is_public: raw_public,
+    });
+    if (!updated) {
+      res.status(404).json({ error: "endpoint inconnu" });
+      return;
+    }
+    res.json(updated);
+  }),
+);
+
+// CRUD endpoints. Create / update / delete rows of type `proxy` or `builtin`.
+// Flags (is_active / is_public) stay on the dedicated PATCH /:id/flags route.
+
+interface ParsedEndpointBody {
+  name: string;
+  type: string;
+  description: string | null;
+  config: unknown;
+}
+
+const parseEndpointBody = (
+  raw: unknown,
+):
+  | { ok: true; value: ParsedEndpointBody }
+  | { ok: false; status: number; error: string } => {
+  const body = (raw ?? {}) as Record<string, unknown>;
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const nameErr = validateEndpointName(name);
+  if (nameErr) return { ok: false, status: 400, error: nameErr };
+
+  const type = typeof body.type === "string" ? body.type : "";
+  const schema =
+    type === "proxy"
+      ? proxyConfigSchema
+      : type === "builtin"
+        ? builtinConfigSchema
+        : null;
+  if (!schema) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'type must be "proxy" or "builtin"',
+    };
+  }
+
+  const description =
+    body.description === undefined ||
+    body.description === null ||
+    body.description === ""
+      ? null
+      : String(body.description);
+
+  const parsed = schema.safeParse(body.config);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const path = issue?.path?.join(".") || "config";
+    return {
+      ok: false,
+      status: 400,
+      error: `config.${path}: ${issue?.message ?? "invalid"}`,
+    };
+  }
+
+  return {
+    ok: true,
+    value: { name, type, description, config: parsed.data },
+  };
+};
+
+evalRouter.post(
+  "/endpoints",
+  wrap(async (req, res) => {
+    const parsed = parseEndpointBody(req.body);
+    if (!parsed.ok) {
+      res.status(parsed.status).json({ error: parsed.error });
+      return;
+    }
+    try {
+      const row = await db.createEndpoint(parsed.value);
+      res.status(201).json(row);
+    } catch (e) {
+      if (e instanceof db.EndpointNameConflictError) {
+        res.status(409).json({ error: "name already exists" });
+        return;
+      }
+      throw e;
+    }
+  }),
+);
+
+evalRouter.put(
+  "/endpoints/:id",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "id invalide" });
+      return;
+    }
+    const parsed = parseEndpointBody(req.body);
+    if (!parsed.ok) {
+      res.status(parsed.status).json({ error: parsed.error });
+      return;
+    }
+    // Pre-check to distinguish 404 (row absent) from 200/409 — otherwise an
+    // UPDATE without a match silently returns null with no signal as to why.
+    const existing = await db.getEndpoint(id);
+    if (!existing) {
+      res.status(404).json({ error: "endpoint not found" });
+      return;
+    }
+    try {
+      const row = await db.updateEndpoint(id, parsed.value);
+      if (!row) {
+        res.status(404).json({ error: "endpoint not found" });
+        return;
+      }
+      res.json(row);
+    } catch (e) {
+      if (e instanceof db.EndpointNameConflictError) {
+        res.status(409).json({ error: "name already exists" });
+        return;
+      }
+      throw e;
+    }
+  }),
+);
+
+evalRouter.delete(
+  "/endpoints/:id",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "id invalide" });
+      return;
+    }
+    const ok = await db.deleteEndpoint(id);
+    if (!ok) {
+      res.status(404).json({ error: "endpoint not found" });
+      return;
+    }
+    res.status(204).end();
   }),
 );

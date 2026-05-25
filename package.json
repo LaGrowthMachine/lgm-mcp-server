@@ -13,6 +13,7 @@
     "dev": "ts-node src/index.ts",
     "dev:web": "cd web && npm run dev",
     "dev:all": "concurrently -k -n server,web -c blue,green \"npm:dev\" \"npm:dev:web\"",
+    "seed:endpoints": "psql \"${EVAL_DATABASE_URL:-postgres://eval:eval@localhost:5433/eval}\" -f scripts/seed-endpoints.sql",
     "test": "jest --runInBand",
     "pack": "tsc && cp manifest.json manifest.bak.json && node -e \"let m=require('./manifest.json');delete m.user_config.api_url;m.server.mcp_config.env={LGM_MCP_TRANSPORT:'stdio',LGM_API_KEY:'\\${user_config.api_key}'};require('fs').writeFileSync('manifest.json',JSON.stringify(m,null,2))\" && npx @anthropic-ai/mcpb pack && mv manifest.bak.json manifest.json && mv lgm-mcp-server.mcpb lgm-mcp.mcpb",
     "pack:dev": "tsc && cp manifest.json manifest.bak.json && node -e \"let m=require('./manifest.json');m.name='LGM-Sandbox';m.display_name='LaGrowthMachine Sandbox';require('fs').writeFileSync('manifest.json',JSON.stringify(m,null,2))\" && npx @anthropic-ai/mcpb pack && mv manifest.bak.json manifest.json && mv lgm-mcp-server.mcpb lgm-mcp-dev.mcpb"
