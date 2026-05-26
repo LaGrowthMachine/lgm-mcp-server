@@ -15,6 +15,7 @@ import { requestContext, isAllowedApiUrl, getApiUrl } from "./requestContext";
 import oauthRouter from "./oauth";
 import { evalRouter } from "./eval/routes";
 import { ensureSchema, listEndpoints } from "./eval/db";
+import { googleAuth } from "./eval/googleAuth";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
@@ -124,11 +125,25 @@ const buildPerRequestServer = async (): Promise<McpServer> => {
 const startHttpServer = async () => {
   const app = express();
 
+  // Heroku puts one proxy hop in front of the dyno (router → app). Without
+  // this, `req.secure` is always false and `req.protocol` always "http",
+  // breaking the Secure cookie attribute decision in googleAuth.
+  app.set("trust proxy", 1);
+
   // Eval web app (validation harness) served by this same server — path-routed,
   // no second process. API under /api/eval (parser 4 MB, mounted BEFORE the
   // global 100 KB json parser); React build served statically under /eval.
   // /mcp, /health, /oauth are untouched.
-  app.use(["/api/eval", "/eval"], evalBasicAuth);
+  //
+  // Dual-gate: evalBasicAuth (outer Heroku gate, shared password) then
+  // googleAuth.middleware (inner per-user identification, @lagrowthmachine.com).
+  // Both must pass. Google middleware bypasses /auth/{login,callback,logout}
+  // so the OAuth flow can complete.
+  app.use(["/api/eval", "/eval"], evalBasicAuth, googleAuth.middleware());
+  app.get("/eval/auth/login", googleAuth.loginHandler);
+  app.get("/eval/auth/callback", googleAuth.callbackHandler);
+  app.get("/eval/auth/logout", googleAuth.logoutHandler);
+  app.get("/api/eval/auth/me", googleAuth.meHandler);
   app.use("/api/eval", evalRouter);
   const webDist = path.resolve(__dirname, "../web-dist");
   if (fs.existsSync(webDist)) {

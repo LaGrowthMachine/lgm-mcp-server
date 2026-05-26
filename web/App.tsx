@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Layout, Menu, Typography, theme } from "antd";
 import {
   SearchOutlined,
@@ -9,6 +10,8 @@ import {
   SettingOutlined,
   ThunderboltOutlined,
   ApiOutlined,
+  UserOutlined,
+  LogoutOutlined,
 } from "@ant-design/icons";
 import {
   Routes,
@@ -44,6 +47,176 @@ const NAV = [
   { key: "/settings", icon: <SettingOutlined />, label: "Réglages" },
 ];
 
+// Source de vérité auth pour tout le SPA. Hook partagé entre RequireAuth
+// (qui bloque le rendu) et UserBadge (affichage). Une seule requête /me.
+type AuthState =
+  | { kind: "loading" }
+  | { kind: "logged_in"; email: string; name: string }
+  | { kind: "logged_out"; loginUrl: string }
+  | { kind: "disabled" };
+
+function useAuth(): AuthState {
+  const [state, setState] = useState<AuthState>({ kind: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/eval/auth/me", {
+          credentials: "same-origin",
+        });
+        if (cancelled) return;
+        if (r.ok) {
+          const u = (await r.json()) as { email: string; name: string };
+          setState({ kind: "logged_in", ...u });
+          return;
+        }
+        if (r.status === 401) {
+          const body = (await r.json().catch(() => ({}))) as {
+            error?: string;
+            loginUrl?: string;
+          };
+          if (body.error === "auth_disabled") {
+            setState({ kind: "disabled" });
+          } else {
+            const here = window.location.pathname + window.location.search;
+            const loginUrl = `${body.loginUrl ?? "/eval/auth/login"}?returnTo=${encodeURIComponent(here)}`;
+            setState({ kind: "logged_out", loginUrl });
+          }
+          return;
+        }
+      } catch {
+        // Erreur réseau (backend down, DNS, CORS) : on ne sait PAS si l'auth
+        // est désactivée ou si la session est valide. Plus conservateur de
+        // traiter comme non-loggué pour que RequireAuth bounce vers le login
+        // au lieu d'exposer la SPA transitoirement.
+        if (!cancelled) {
+          const here = window.location.pathname + window.location.search;
+          const loginUrl = `/eval/auth/login?returnTo=${encodeURIComponent(here)}`;
+          setState({ kind: "logged_out", loginUrl });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return state;
+}
+
+// Gate global : tant que /me n'a pas répondu, on n'affiche RIEN du SPA.
+// Si 401 → redirect direct vers /eval/auth/login (pas de flicker). Si dev
+// avec auth désactivée → on laisse passer.
+function RequireAuth({
+  state,
+  children,
+}: {
+  state: AuthState;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    if (state.kind === "logged_out") {
+      window.location.replace(state.loginUrl);
+    }
+  }, [state]);
+
+  if (state.kind === "loading" || state.kind === "logged_out") {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: LGM_COLORS.charcoal,
+          color: "rgba(255,255,255,.6)",
+          fontFamily: "Inter, system-ui, sans-serif",
+          fontSize: 14,
+        }}
+      >
+        {state.kind === "loading" ? "Chargement…" : "Redirection vers Google…"}
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
+
+function UserBadge({ state }: { state: AuthState }) {
+
+  if (state.kind === "loading" || state.kind === "disabled") return null;
+
+  if (state.kind === "logged_out") {
+    return (
+      <div
+        style={{
+          marginLeft: "auto",
+          display: "flex",
+          alignItems: "center",
+          gap: 16,
+        }}
+      >
+        <a
+          href={state.loginUrl}
+          style={{
+            color: LGM_COLORS.charcoal,
+            background: LGM_COLORS.green,
+            fontSize: 13,
+            fontWeight: 600,
+            padding: "6px 12px",
+            borderRadius: 6,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            textDecoration: "none",
+          }}
+        >
+          <UserOutlined />
+          Se connecter avec Google
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        marginLeft: "auto",
+        display: "flex",
+        alignItems: "center",
+        gap: 16,
+      }}
+    >
+      <span
+        style={{
+          color: "rgba(255,255,255,.75)",
+          fontSize: 13,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <UserOutlined />
+        {state.email}
+      </span>
+      <a
+        href="/eval/auth/logout"
+        style={{
+          color: LGM_COLORS.green,
+          fontSize: 13,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          textDecoration: "none",
+        }}
+      >
+        <LogoutOutlined />
+        Se déconnecter
+      </a>
+    </div>
+  );
+}
+
 // Overrides ciblés pour le menu dark sidebar : barre verticale verte sur
 // l'item actif (signature LGM) + wrap libellé sur 2 lignes si besoin.
 const MENU_CSS = `
@@ -78,10 +251,12 @@ export function Shell() {
   const navigate = useNavigate();
   const loc = useLocation();
   const { token } = theme.useToken();
+  const authState = useAuth();
   const selected =
     NAV.find((n) => loc.pathname.startsWith(n.key))?.key ?? "/discover";
 
   return (
+    <RequireAuth state={authState}>
     <Layout style={{ minHeight: "100vh" }}>
       <style>{MENU_CSS}</style>
       <Header
@@ -130,6 +305,7 @@ export function Shell() {
         >
           MCP · IA · agents · modèles
         </Typography.Text>
+        <UserBadge state={authState} />
       </Header>
       <Layout>
         <Sider
@@ -185,5 +361,6 @@ export function Shell() {
         </Content>
       </Layout>
     </Layout>
+    </RequireAuth>
   );
 }

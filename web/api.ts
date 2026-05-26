@@ -2,6 +2,27 @@ import axios from "axios";
 
 export const http = axios.create({ baseURL: "/api/eval" });
 
+// Session expirée / non identifié → on bounce vers le login Google.
+// Le serveur renvoie `{ error: "auth_required", loginUrl }` sur 401 pour
+// les routes /api/eval/* — la SPA ne peut pas suivre un 302 XHR, donc on
+// pilote la navigation côté navigateur.
+http.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status;
+    const body = error?.response?.data as
+      | { error?: string; loginUrl?: string }
+      | undefined;
+    if (status === 401 && body?.error === "auth_required") {
+      const here = window.location.pathname + window.location.search;
+      const target = `${body.loginUrl ?? "/eval/auth/login"}?returnTo=${encodeURIComponent(here)}`;
+      window.location.href = target;
+      return new Promise(() => {});
+    }
+    return Promise.reject(error);
+  },
+);
+
 export interface DiscoverResp {
   users: number;
   count: number;
