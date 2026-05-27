@@ -40,6 +40,28 @@ const fmtCostUsdCsv = (v: number | null | undefined): string => {
 const CONV_CHANNELS = new Set(["LINKEDIN", "EMAIL", "OTHER"]);
 const CONV_SORTS = new Set(["last_at", "first_at", "msg_count", "latest_at"]);
 
+// Sérialise `conversations.transcript` (TranscriptItem[] = ConvMsg | string)
+// pour le golden dataset export. Convertit `at` epoch ms → ISO 8601 UTC
+// (les autres dates du CSV sont en ISO, on garde la cohérence). Items legacy
+// (string brut) emis comme `{ text: "...", role: null }` pour préserver le
+// contenu sans inventer de role/channel.
+const serializeTranscriptForCsv = (
+  transcript: db.TranscriptItem[] | null | undefined,
+): string => {
+  if (!transcript || !Array.isArray(transcript)) return "";
+  const normalized = transcript.map((m) => {
+    if (typeof m === "string") return { role: null, text: m };
+    return {
+      role: m.role,
+      at: m.at > 0 ? new Date(m.at).toISOString() : null,
+      channel: m.channel,
+      ...(m.subject ? { subject: m.subject } : {}),
+      text: m.text,
+    };
+  });
+  return JSON.stringify(normalized);
+};
+
 const setCsvHeaders = (
   res: express.Response,
   filename: string,
@@ -484,38 +506,41 @@ evalRouter.get(
         );
       return;
     }
-    // `pageSize` cappé à 100 côté listConversations ; on contourne en passant
-    // count (>0, sinon `Math.max(1, count)` pour rester un entier positif —
-    // un batch vide reste un export valide avec juste le header).
-    const fetched = await db.listConversations({
-      page: 1,
-      pageSize: Math.max(1, count),
-      ...filters,
-    });
+    // Export "golden dataset" : LEFT JOIN canon + transcript inline. Pas de
+    // pagination, on charge tout le périmètre filtré (cappé à 10k au-dessus).
+    const rows = await db.listConversationsForExport(filters);
     const header = toCsvRow([
       "conversation_id",
       "is_favorite",
       "analyses_count",
       "has_canon",
+      "canon_label",
+      "canon_sub_label",
+      "canon_reason",
       "msg_count",
       "first_at",
       "last_at",
       "latest_at",
       "last_role",
       "channels",
+      "transcript",
     ]);
-    const body = fetched.rows.map((r) =>
+    const body = rows.map((r) =>
       toCsvRow([
         r.conversation_id,
         r.is_favorite,
         r.analyses_count,
         r.has_canon,
+        r.canon_label,
+        r.canon_sub_label,
+        r.canon_reason,
         r.msg_count,
         isoOrEmpty(r.first_at),
         isoOrEmpty(r.last_at),
         isoOrEmpty(r.latest_at),
         r.last_role,
         r.channels ? r.channels.join(";") : "",
+        serializeTranscriptForCsv(r.transcript),
       ]),
     );
     const csv = CSV_BOM + [header, ...body].join("\r\n");

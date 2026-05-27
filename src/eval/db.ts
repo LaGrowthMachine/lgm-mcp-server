@@ -792,6 +792,76 @@ export const countConversations = async (
   return parseInt(rows[0]?.count ?? "0", 10);
 };
 
+// Row enrichie pour l'export "golden dataset". Ajoute aux métadonnées :
+// les labels canon (depuis l'analyse `is_canon=true`, au plus 1/conv via
+// l'index partiel `analyses_one_canon`), la raison du canon, et le
+// transcript structuré (`ConvMsg[]`, déjà en JSONB côté `conversations`).
+export interface ConvExportRow {
+  conversation_id: string;
+  is_favorite: boolean;
+  analyses_count: number;
+  has_canon: boolean;
+  canon_label: string | null;
+  canon_sub_label: string | null;
+  canon_reason: string | null;
+  msg_count: number;
+  first_at: string | null;
+  last_at: string | null;
+  latest_at: string | null;
+  last_role: string | null;
+  channels: string[] | null;
+  transcript: TranscriptItem[];
+}
+
+export const listConversationsForExport = async (
+  f: Omit<ConvListFilters, "page" | "pageSize" | "sort" | "dir">,
+): Promise<ConvExportRow[]> => {
+  const args: unknown[] = [];
+  // `buildConvListFrom` produit un fragment `FROM ... WHERE ...` qu'on ne
+  // peut pas étendre avec un JOIN supplémentaire après le WHERE (SQL invalide).
+  // On enveloppe dans un CTE puis on rejoint le canon dessus.
+  const from = buildConvListFrom(f, args);
+  const { rows } = await getPool().query<ConvExportRow>(
+    `WITH filtered AS (
+       SELECT c.conversation_id, c.is_favorite, c.msg_count,
+              c.first_at, c.last_at, c.last_role, c.channels, c.transcript,
+              c.updated_at,
+              COALESCE(a.cnt, 0)::int  AS analyses_count,
+              COALESCE(a.canon, false) AS has_canon,
+              a.latest_at
+       ${from}
+     )
+     SELECT f.conversation_id, f.is_favorite, f.analyses_count, f.has_canon,
+            canon.canon_label, canon.canon_sub_label, canon.canon_reason,
+            f.msg_count,
+            f.first_at::text  AS first_at,
+            f.last_at::text   AS last_at,
+            f.latest_at::text AS latest_at,
+            f.last_role, f.channels, f.transcript
+     FROM filtered f
+     -- Sous-requête canon (au plus 1 ligne/conv via l index partiel
+     -- analyses_one_canon). canon_reason est extrait du label retenu :
+     -- payload.analysis.labels[suggested_label].reason. NOTE: le
+     -- payload.analysis.reason extrait par BATCH_JOIN_CTE est en fait
+     -- absent du payload réel -- TODO corriger ce CTE séparément.
+     LEFT JOIN LATERAL (
+       SELECT ca.payload->'analysis'->'classification'->>'suggested_label'
+                AS canon_label,
+              ca.payload->'analysis'->'classification'->>'suggested_sub_label'
+                AS canon_sub_label,
+              ca.payload->'analysis'->'classification'->'labels'->(
+                ca.payload->'analysis'->'classification'->>'suggested_label'
+              )->>'reason' AS canon_reason
+       FROM analyses ca
+       WHERE ca.conversation_id = f.conversation_id AND ca.is_canon = true
+       LIMIT 1
+     ) canon ON true
+     ORDER BY f.last_at DESC NULLS LAST, f.updated_at DESC`,
+    args,
+  );
+  return rows;
+};
+
 // Probe `count(*)` des analyses d'un batch (cap export-csv). Les batches sont
 // normalement O(100), le cap est de la défense en profondeur contre un
 // éventuel runaway batch surdimensionné.
