@@ -37,6 +37,10 @@ export interface ReplyContext {
   conversationId: string;
   channel: string | null; // LINKEDIN | EMAIL | …
   conversationStatus: string | null;
+  // identityId LGM 24-hex de la conv : utilisé par le replyGenerator pour
+  // charger l'éventuel profil stylométrique de l'identité côté SENDER.
+  // null si la conv n'existe pas / pas d'identité résolue.
+  identityId: string | null;
   lead: ReplyLead;
   campaign: ReplyCampaign;
 }
@@ -57,6 +61,7 @@ export const buildReplyContext = async (
     {
       projection: {
         leadId: 1,
+        identityId: 1,
         lastCampaignIdWithMessageSent: 1,
         lastMessageType: 1,
         status: 1,
@@ -90,6 +95,7 @@ export const buildReplyContext = async (
       conversationId,
       channel: null,
       conversationStatus: null,
+      identityId: null,
       lead: emptyLead,
       campaign: emptyCampaign,
     };
@@ -157,10 +163,14 @@ export const buildReplyContext = async (
       }
     : emptyCampaign;
 
+  // P10: on uppercase le canal au seam Mongo — le reste du code (lookup
+  // profil identité, comparaison) assume "LINKEDIN" / "EMAIL" en majuscules.
+  const channelRaw = s(conv.lastMessageType);
   return {
     conversationId,
-    channel: s(conv.lastMessageType),
+    channel: channelRaw ? channelRaw.toUpperCase() : null,
     conversationStatus: s(conv.status),
+    identityId: conv.identityId ? String(conv.identityId) : null,
     lead,
     campaign,
   };

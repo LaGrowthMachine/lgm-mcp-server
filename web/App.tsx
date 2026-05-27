@@ -26,7 +26,10 @@ import { BatchDetail } from "./pages/BatchDetail";
 import { GenerateReplies } from "./pages/GenerateReplies";
 import { Conversations } from "./pages/Conversations";
 import { RepliesList } from "./pages/RepliesList";
+import { ReplyDetail } from "./pages/ReplyDetail";
 import { ConversationDetail } from "./pages/ConversationDetail";
+import { Profiles } from "./pages/Profiles";
+import { ProfileDetail } from "./pages/ProfileDetail";
 import { Prompts } from "./pages/Prompts";
 import { Models } from "./pages/Models";
 import { Endpoints } from "./pages/Endpoints";
@@ -41,6 +44,7 @@ const NAV = [
   { key: "/generate", icon: <SendOutlined />, label: "Générer" },
   { key: "/conversations", icon: <MessageOutlined />, label: "Conversations" },
   { key: "/replies", icon: <CommentOutlined />, label: "Réponses" },
+  { key: "/profiles", icon: <UserOutlined />, label: "Profils" },
   { key: "/prompts", icon: <FileTextOutlined />, label: "Prompts" },
   { key: "/models", icon: <ThunderboltOutlined />, label: "Modèles" },
   { key: "/endpoints", icon: <ApiOutlined />, label: "Endpoints MCP" },
@@ -352,6 +356,12 @@ export function Shell() {
                 element={<ConversationDetail />}
               />
               <Route path="/replies" element={<RepliesList />} />
+              <Route path="/replies/:id" element={<ReplyDetail />} />
+              <Route path="/profiles" element={<Profiles />} />
+              <Route
+                path="/profiles/:identityId/:channel"
+                element={<ProfileDetail />}
+              />
               <Route path="/prompts" element={<Prompts />} />
               <Route path="/models" element={<Models />} />
               <Route path="/endpoints" element={<Endpoints />} />

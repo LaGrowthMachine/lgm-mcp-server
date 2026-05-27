@@ -3,6 +3,10 @@ import { ObjectId } from "mongodb";
 import { getDb } from "../agents/db-explorer/mongoClient";
 import { analyzeConversationWithDbPrompt } from "./analyzer";
 import { generateReply } from "./replyGenerator";
+import { analyzeIdentity } from "./identityProfiler";
+import { computeMetrics, compareMetrics } from "./stylometry";
+import type { IdentityProfilePayload } from "./identityProfiler";
+import { fetchIdentityLabels } from "./identityLabels";
 import { diffAnalyses, diffReplies } from "./diff";
 import * as db from "./db";
 import { CSV_BOM, toCsvRow } from "./csv";
@@ -648,7 +652,14 @@ evalRouter.post(
     const promptName = req.body?.promptName
       ? String(req.body.promptName)
       : undefined;
-    const resolved = await db.resolveEffectiveModelId();
+    const modelIdParam = req.body?.modelId
+      ? String(req.body.modelId)
+      : undefined;
+    if (modelIdParam !== undefined && !UUID_RE.test(modelIdParam)) {
+      res.status(400).json({ error: "modelId invalide" });
+      return;
+    }
+    const resolved = await db.resolveEffectiveModelId(modelIdParam);
     const gen = await generateReply(id, {
       model: resolved.awsModelId,
       promptName,
@@ -691,6 +702,10 @@ evalRouter.post(
       replyText: gen.result.replyText,
       hasFavorite: !!favBefore,
       vsFavorite,
+      // Validation stylométrique vs profil identité — null si conv sans
+      // (identityId, channel) résolu ou profil absent. L'UI affiche un
+      // badge explicite quand c'est null (cf. ConversationDetail).
+      validation: gen.result.validation,
     });
   }),
 );
@@ -711,7 +726,26 @@ evalRouter.get(
       100,
       Math.max(1, parseInt(String(req.query.pageSize ?? "30"), 10) || 30),
     );
-    res.json(await db.listReplies(page, pageSize));
+    const { rows, total } = await db.listReplies(page, pageSize);
+    // Batch lookup des libellés humains (firstname + lastname ou email) pour
+    // chaque identityId présent dans la page. Si Mongo plante, on dégrade
+    // gracieusement vers null — la liste reste consultable.
+    const identityIds = rows
+      .map((r) => r.identity_id)
+      .filter((v): v is string => !!v);
+    let labels: Map<string, { label: string | null }> = new Map();
+    try {
+      labels = await fetchIdentityLabels(identityIds);
+    } catch {
+      // labels reste vide → UI affichera l'id brut comme fallback.
+    }
+    const enriched = rows.map((r) => ({
+      ...r,
+      identity_label: r.identity_id
+        ? labels.get(r.identity_id)?.label ?? null
+        : null,
+    }));
+    res.json({ rows: enriched, total });
   }),
 );
 
@@ -728,6 +762,65 @@ evalRouter.delete(
   wrap(async (req, res) => {
     await db.deleteReply(String(req.params.id));
     res.json({ ok: true });
+  }),
+);
+
+// Détail d'une réponse + validation stylométrique recalculée live vs le
+// profil identité courant. La validation n'est PAS persistée car le profil
+// peut évoluer (re-analyse) — la valeur courante est toujours plus utile que
+// le snapshot au moment de la génération.
+evalRouter.get(
+  "/replies/:id",
+  wrap(async (req, res) => {
+    const reply = await db.getReplyById(String(req.params.id));
+    if (!reply) {
+      res.status(404).json({ error: "Réponse introuvable" });
+      return;
+    }
+    const ctx = (reply.context ?? {}) as {
+      identityId?: string | null;
+      channel?: string | null;
+    };
+    let validation: {
+      score: number | null;
+      breakdown: ReturnType<typeof compareMetrics>["breakdown"];
+      reply_metrics: ReturnType<typeof computeMetrics>;
+    } | null = null;
+    let profileMissingReason: string | null = null;
+    const identityId = ctx.identityId ?? null;
+    const channel = ctx.channel ? String(ctx.channel).toUpperCase() : null;
+    if (identityId && (channel === "LINKEDIN" || channel === "EMAIL")) {
+      const current = await db.getCurrentIdentityProfile(identityId, channel);
+      const payload = current?.payload as IdentityProfilePayload | undefined;
+      if (payload?.metrics) {
+        const replyMetrics = computeMetrics([reply.reply_text]);
+        const cmp = compareMetrics(replyMetrics, payload.metrics);
+        validation = {
+          score: cmp.score,
+          breakdown: cmp.breakdown,
+          reply_metrics: replyMetrics,
+        };
+      } else {
+        profileMissingReason = current
+          ? "profile_payload_invalid"
+          : "no_profile";
+      }
+    } else {
+      profileMissingReason = "no_identity_or_channel";
+    }
+    res.json({
+      id: reply.id,
+      conversation_id: reply.conversation_id,
+      prompt_name: reply.prompt_name,
+      reply_text: reply.reply_text,
+      context: reply.context,
+      is_favorite: reply.is_favorite,
+      created_at: reply.created_at,
+      identity_id: identityId,
+      channel: channel,
+      validation,
+      profile_missing_reason: profileMissingReason,
+    });
   }),
 );
 
@@ -1242,5 +1335,265 @@ evalRouter.delete(
       return;
     }
     res.status(204).end();
+  }),
+);
+
+// =============================================================================
+// Identity stylometric profiles (LAGM-16436)
+// =============================================================================
+// Pattern miroir des batchs d'analyses : POST /batches crée la coquille +
+// fige le périmètre, puis le client lance POST /analyze/:batchId/:identityId
+// en parallèle pour chaque identité, et PATCH /batches/:id { status } à la
+// fin. Aucun tool MCP — uniquement /eval.
+
+const DEFAULT_IDENTITY_TOKEN_CAP = 10_000;
+const MIN_IDENTITY_TOKEN_CAP = 500;
+const MAX_IDENTITY_TOKEN_CAP = 200_000;
+
+const parseIdentityChannel = (v: unknown): "LINKEDIN" | "EMAIL" | null => {
+  if (typeof v !== "string") return null;
+  const up = v.toUpperCase();
+  if (up === "LINKEDIN" || up === "EMAIL") return up;
+  return null;
+};
+
+evalRouter.post(
+  "/identities/batches",
+  wrap(async (req, res) => {
+    const raw: unknown[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const ids = [
+      ...new Set(raw.map((v) => String(v)).filter((s) => HEX24.test(s))),
+    ];
+    if (ids.length === 0) {
+      res.status(400).json({ error: "aucune identité valide à analyser" });
+      return;
+    }
+    const modelIdParam = req.body?.modelId
+      ? String(req.body.modelId)
+      : undefined;
+    if (modelIdParam !== undefined && !UUID_RE.test(modelIdParam)) {
+      res.status(400).json({ error: "modelId invalide" });
+      return;
+    }
+    const resolved = await db.resolveEffectiveModelId(modelIdParam);
+
+    const tokenCapRaw = parseInt(String(req.body?.tokenCap ?? ""), 10);
+    const tokenCap =
+      Number.isFinite(tokenCapRaw) && tokenCapRaw > 0
+        ? Math.min(MAX_IDENTITY_TOKEN_CAP, Math.max(MIN_IDENTITY_TOKEN_CAP, tokenCapRaw))
+        : DEFAULT_IDENTITY_TOKEN_CAP;
+
+    const batch = await db.createIdentitiesBatch({
+      sourceIds: ids,
+      tokenCap,
+      modelId: resolved.uuid,
+    });
+    res.json(batch);
+  }),
+);
+
+evalRouter.post(
+  "/identities/analyze/:batchId/:identityId",
+  wrap(async (req, res) => {
+    const batchId = String(req.params.batchId);
+    const identityId = String(req.params.identityId);
+    if (!UUID_RE.test(batchId)) {
+      res.status(400).json({ error: "batchId invalide" });
+      return;
+    }
+    if (!HEX24.test(identityId)) {
+      res.status(400).json({ error: "identityId invalide" });
+      return;
+    }
+    const channel = parseIdentityChannel(req.body?.channel);
+    if (!channel) {
+      res.status(400).json({ error: "channel doit être LINKEDIN ou EMAIL" });
+      return;
+    }
+    const batch = await db.getIdentitiesBatch(batchId);
+    if (!batch) {
+      res.status(404).json({ error: "batch inconnu" });
+      return;
+    }
+    // P1: garde le batch en `running` — refuse les appels sur done/aborted
+    // (évite re-billing depuis un onglet zombie ou un PATCH partiel).
+    if (batch.status !== "running") {
+      res.status(409).json({ error: `batch ${batch.status} — analyse refusée` });
+      return;
+    }
+    // P1: idempotence cheap : si une analyse `ok` existe déjà pour
+    // (batch, identity, channel), renvoyer la même sans facturer une 2ᵉ
+    // inférence. Le client peut retry sans risque.
+    const existing = await db.findIdentityAnalysis(batchId, identityId, channel);
+    if (existing && existing.status === "ok") {
+      res.json({
+        analysisId: existing.id,
+        identityId,
+        channel,
+        status: "ok",
+        payload: existing.payload,
+      });
+      return;
+    }
+    // Modèle figé par le batch (résolu à la création). Même contrat que les
+    // analyses : on n'autorise pas le client à override per-analyse.
+    if (!batch.model_id || !batch.model_aws_id) {
+      res.status(409).json({
+        error: "batch sans modèle résolu",
+        code: "MODEL_NOT_CONFIGURED",
+      });
+      return;
+    }
+
+    try {
+      const result = await analyzeIdentity({
+        identityId,
+        channel,
+        model: batch.model_aws_id,
+        tokenCap: batch.token_cap,
+      });
+      const inserted = await db.insertIdentityAnalysis({
+        batchId,
+        identityId,
+        channel,
+        status: "ok",
+        payload: result.payload,
+        modelId: batch.model_id,
+        inputTokens: result.usage?.inputTokens ?? null,
+        outputTokens: result.usage?.outputTokens ?? null,
+      });
+      res.json({
+        analysisId: inserted.id,
+        identityId,
+        channel,
+        status: "ok",
+        payload: result.payload,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // P18: l'insert "error" peut lui-même échouer (DB hiccup). On l'isole
+      // dans son propre try pour ne pas masquer l'erreur d'origine, qui doit
+      // continuer à remonter au wrap() (→ 500).
+      try {
+        const inserted = await db.insertIdentityAnalysis({
+          batchId,
+          identityId,
+          channel,
+          status: "error",
+          payload: null,
+          modelId: batch.model_id,
+          errorMessage: msg,
+        });
+        res.json({
+          analysisId: inserted.id,
+          identityId,
+          channel,
+          status: "error",
+          error: msg,
+        });
+        return;
+      } catch (e2) {
+        console.error(
+          "[identity-profiles] failed to record error analysis:",
+          e2,
+        );
+        throw e;
+      }
+    }
+  }),
+);
+
+evalRouter.patch(
+  "/identities/batches/:id",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "batchId invalide" });
+      return;
+    }
+    const status = req.body?.status;
+    if (status !== "done" && status !== "aborted") {
+      res.status(400).json({ error: "status doit être done|aborted" });
+      return;
+    }
+    // P5: l'helper renvoie false si le batch n'est plus `running` (déjà
+    // finalisé ou inexistant). On surface ça en 409 plutôt que retourner ok.
+    const updated = await db.updateIdentitiesBatchStatus(id, status);
+    if (!updated) {
+      res
+        .status(409)
+        .json({ error: "batch already finalized or not found" });
+      return;
+    }
+    res.json({ ok: true });
+  }),
+);
+
+evalRouter.get(
+  "/identities/batches/:id",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "batchId invalide" });
+      return;
+    }
+    const batch = await db.getIdentitiesBatch(id);
+    if (!batch) {
+      res.status(404).json({ error: "batch inconnu" });
+      return;
+    }
+    res.json(batch);
+  }),
+);
+
+evalRouter.get(
+  "/identities/profiles",
+  wrap(async (req, res) => {
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+    const pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(String(req.query.pageSize ?? "20"), 10) || 20),
+    );
+    res.json(await db.listIdentityProfiles(page, pageSize));
+  }),
+);
+
+evalRouter.get(
+  "/identities/profiles/:identityId/:channel",
+  wrap(async (req, res) => {
+    const identityId = String(req.params.identityId);
+    const channel = parseIdentityChannel(req.params.channel);
+    if (!HEX24.test(identityId)) {
+      res.status(400).json({ error: "identityId invalide" });
+      return;
+    }
+    if (!channel) {
+      res.status(400).json({ error: "channel invalide" });
+      return;
+    }
+    const profile = await db.getIdentityProfile(identityId, channel);
+    if (!profile) {
+      res.status(404).json({ error: "profil inconnu" });
+      return;
+    }
+    res.json(profile);
+  }),
+);
+
+evalRouter.get(
+  "/identities/profiles/:identityId/:channel/conversations",
+  wrap(async (req, res) => {
+    const identityId = String(req.params.identityId);
+    const channel = parseIdentityChannel(req.params.channel);
+    if (!HEX24.test(identityId)) {
+      res.status(400).json({ error: "identityId invalide" });
+      return;
+    }
+    if (!channel) {
+      res.status(400).json({ error: "channel invalide" });
+      return;
+    }
+    const convs = await db.listConversationsByIdentity(identityId, channel);
+    res.json({ rows: convs });
   }),
 );

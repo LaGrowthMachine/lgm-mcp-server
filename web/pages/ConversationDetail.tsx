@@ -11,6 +11,7 @@ import {
   Divider,
   Modal,
   Input,
+  InputNumber,
 } from "antd";
 import {
   StarFilled,
@@ -26,11 +27,13 @@ import {
   ReplyRowApi,
   AnalysisRow,
   TranscriptItem,
+  GenerateReplyResp,
 } from "../api";
 import { diffLines, DiffLine } from "../lineDiff";
 import { LGM_COLORS, MONO_STACK } from "../theme";
 import { PageHeader } from "../components/PageHeader";
 import { EmptyState } from "../components/EmptyState";
+import { ModelSelect } from "../ModelSelect";
 import { fmtDateTime, fmtCost } from "../format";
 
 // "2023-05-24 14:32" (epoch ms) → libellé court fr. "" si inconnu.
@@ -262,6 +265,12 @@ export function ConversationDetail() {
   const [editAid, setEditAid] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
   const [editSaving, setEditSaving] = useState(false);
+  // Paramètres de génération de réponse (LAGM-16436). Modèle = override sur
+  // settings.default_model_id ; tokenCap = budget contexte pour le grounding
+  // futur (forward-compat). La validation stylométrique se consulte sur la
+  // page détail de chaque réponse, pas inline ici.
+  const [genModel, setGenModel] = useState<string>("");
+  const [genTokenCap, setGenTokenCap] = useState<number>(10_000);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -342,9 +351,18 @@ export function ConversationDetail() {
   };
 
   const genReply = async () => {
+    if (!Number.isFinite(genTokenCap) || genTokenCap < 100) {
+      message.error("Token cap invalide");
+      return;
+    }
     setGenerating(true);
     try {
-      const { data: r } = await http.post(`/reply/${id}`);
+      const body: Record<string, unknown> = { tokenCap: genTokenCap };
+      if (genModel) body.modelId = genModel;
+      const { data: r } = await http.post<GenerateReplyResp>(
+        `/reply/${id}`,
+        body,
+      );
       if (r.status === "skipped") message.info(r.reason ?? "ignoré");
       else message.success(`Réponse générée (prompt ${r.promptName})`);
       load();
@@ -404,6 +422,25 @@ export function ConversationDetail() {
             >
               {data.is_favorite ? "Favorite" : "Marquer favorite"}
             </Button>
+            <ModelSelect
+              value={genModel}
+              onChange={setGenModel}
+              disabled={generating}
+            />
+            <Space size={4}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Token cap
+              </Typography.Text>
+              <InputNumber
+                min={500}
+                max={200_000}
+                step={1000}
+                value={genTokenCap}
+                onChange={(v) => setGenTokenCap(Number(v ?? 10_000))}
+                disabled={generating}
+                style={{ width: 100 }}
+              />
+            </Space>
             <Button
               type="primary"
               icon={<SendOutlined />}
@@ -486,6 +523,12 @@ export function ConversationDetail() {
               }
               extra={
                 <Space>
+                  <Button
+                    size="small"
+                    onClick={() => navigate(`/replies/${r.id}`)}
+                  >
+                    Détail
+                  </Button>
                   <Button
                     size="small"
                     type={r.is_favorite ? "default" : "primary"}

@@ -353,6 +353,55 @@ export const ensureSchema = async (): Promise<void> => {
   // Endpoint seeding lives outside the app: `scripts/seed-endpoints.sql`
   // (run via `npm run seed:endpoints`). The DB is the source of truth and
   // deletions are permanent.
+
+  // ----------------- Identity stylometric profiles (LAGM-16436) -----------------
+  // Pipeline d'analyse stylométrique par (identity_id, channel). On stocke :
+  // - `identities_batches` : un lancement (liste d'identités à analyser).
+  // - `identities_analyses` : 1 ligne par analyse réelle (status + payload
+  //   JSONB = description + metrics + corpus meta). Historique préservé : un
+  //   re-run insère une nouvelle row.
+  // - `identities_profiles` : pointeur vers l'analyse courante (1 par
+  //   (identity_id, channel)). Re-run = mise à jour de `current_analysis_id`.
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS identities_batches (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      status       TEXT NOT NULL DEFAULT 'running',
+      input_count  INT NOT NULL,
+      source_ids   TEXT[] NOT NULL,
+      token_cap    INT NOT NULL,
+      model_id     UUID REFERENCES models(id) ON DELETE SET NULL,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS identities_batches_created_at
+      ON identities_batches (created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS identities_analyses (
+      id              BIGSERIAL PRIMARY KEY,
+      batch_id        UUID REFERENCES identities_batches(id) ON DELETE SET NULL,
+      identity_id     TEXT NOT NULL,
+      channel         TEXT NOT NULL CHECK (channel IN ('LINKEDIN', 'EMAIL')),
+      status          TEXT NOT NULL,
+      payload         JSONB,
+      model_id        UUID REFERENCES models(id) ON DELETE SET NULL,
+      input_tokens    INT,
+      output_tokens   INT,
+      error_message   TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS identities_analyses_identity
+      ON identities_analyses (identity_id, channel, created_at DESC);
+    CREATE INDEX IF NOT EXISTS identities_analyses_batch
+      ON identities_analyses (batch_id) WHERE batch_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS identities_profiles (
+      identity_id          TEXT NOT NULL,
+      channel              TEXT NOT NULL CHECK (channel IN ('LINKEDIN', 'EMAIL')),
+      current_analysis_id  BIGINT REFERENCES identities_analyses(id) ON DELETE SET NULL,
+      updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (identity_id, channel)
+    );
+  `);
 };
 
 // ---------- prompts ----------
@@ -1139,7 +1188,25 @@ export const deleteReply = async (replyId: string): Promise<void> => {
   await getPool().query("DELETE FROM replies WHERE id = $1", [replyId]);
 };
 
+// Fetch d'une reply par son id (BIGSERIAL). Utilisé par la page détail
+// /eval/replies/:id et la route GET /api/eval/replies/:id qui recompute la
+// validation stylométrique vs le profil identité courant à la volée.
+export const getReplyById = async (
+  replyId: string,
+): Promise<ReplyRow | null> => {
+  const { rows } = await getPool().query<ReplyRow>(
+    `SELECT id::text AS id, conversation_id, prompt_name, reply_text,
+            context, is_favorite, created_at
+     FROM replies WHERE id = $1`,
+    [replyId],
+  );
+  return rows[0] ?? null;
+};
+
 // Liste globale des réponses (vue liste : clic → renvoie sur la conv).
+// `identity_id` / `channel` sont extraits du JSONB `context` (peuvent être
+// null sur les vieilles replies générées avant la feature stylométrie).
+// Le label humain de l'identité est résolvé après-coup via Mongo (cf. route).
 export interface ReplyListRow {
   id: string;
   conversation_id: string;
@@ -1147,6 +1214,8 @@ export interface ReplyListRow {
   is_favorite: boolean;
   created_at: string;
   preview: string;
+  identity_id: string | null;
+  channel: string | null;
 }
 
 export const listReplies = async (
@@ -1160,7 +1229,9 @@ export const listReplies = async (
   );
   const { rows } = await p.query<ReplyListRow>(
     `SELECT id::text AS id, conversation_id, prompt_name, is_favorite,
-            created_at, left(reply_text, 160) AS preview
+            created_at, left(reply_text, 160) AS preview,
+            context->>'identityId' AS identity_id,
+            upper(context->>'channel') AS channel
      FROM replies
      ORDER BY created_at DESC
      LIMIT $1 OFFSET $2`,
@@ -1988,4 +2059,326 @@ export const deleteEndpoint = async (id: string): Promise<boolean> => {
     [id],
   );
   return (rowCount ?? 0) > 0;
+};
+
+// =============================================================================
+// Identity stylometric profiles (LAGM-16436)
+// =============================================================================
+
+export type IdentityChannel = "LINKEDIN" | "EMAIL";
+export type IdentityBatchStatus = "running" | "done" | "aborted";
+export type IdentityAnalysisStatus = "ok" | "error";
+
+export interface IdentityBatchRow {
+  id: string;
+  status: IdentityBatchStatus;
+  input_count: number;
+  source_ids: string[];
+  token_cap: number;
+  model_id: string | null;
+  model_label: string | null;
+  model_aws_id: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+const selectIdentityBatchCols = `b.id::text AS id, b.status, b.input_count,
+  b.source_ids, b.token_cap,
+  b.model_id::text AS model_id,
+  m.label AS model_label,
+  m.aws_model_id AS model_aws_id,
+  b.created_at::text AS created_at,
+  b.completed_at::text AS completed_at`;
+
+export const createIdentitiesBatch = async (args: {
+  sourceIds: string[];
+  tokenCap: number;
+  modelId: string;
+}): Promise<IdentityBatchRow> => {
+  const { rows } = await getPool().query<IdentityBatchRow>(
+    `WITH inserted AS (
+       INSERT INTO identities_batches (input_count, source_ids, token_cap, model_id)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *
+     )
+     SELECT ${selectIdentityBatchCols}
+     FROM inserted b
+     LEFT JOIN models m ON m.id = b.model_id`,
+    [args.sourceIds.length, args.sourceIds, args.tokenCap, args.modelId],
+  );
+  return rows[0];
+};
+
+export const getIdentitiesBatch = async (
+  id: string,
+): Promise<IdentityBatchRow | null> => {
+  const { rows } = await getPool().query<IdentityBatchRow>(
+    `SELECT ${selectIdentityBatchCols}
+     FROM identities_batches b
+     LEFT JOIN models m ON m.id = b.model_id
+     WHERE b.id = $1`,
+    [id],
+  );
+  return rows[0] ?? null;
+};
+
+export const updateIdentitiesBatchStatus = async (
+  id: string,
+  status: "done" | "aborted",
+): Promise<boolean> => {
+  const { rowCount } = await getPool().query(
+    `UPDATE identities_batches
+        SET status = $2, completed_at = now()
+      WHERE id = $1 AND status = 'running'`,
+    [id, status],
+  );
+  return (rowCount ?? 0) > 0;
+};
+
+export interface IdentityAnalysisRow {
+  id: string;
+  batch_id: string | null;
+  identity_id: string;
+  channel: IdentityChannel;
+  status: IdentityAnalysisStatus;
+  payload: unknown;
+  model_id: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+// Insère 1 analyse (status ok|error) ET met à jour le pointeur de profil
+// vers cette analyse SI elle est ok. Atomique (BEGIN/COMMIT) — un re-run
+// ne laisse jamais le pointeur orphelin.
+export const insertIdentityAnalysis = async (args: {
+  batchId: string | null;
+  identityId: string;
+  channel: IdentityChannel;
+  status: IdentityAnalysisStatus;
+  payload: unknown;
+  modelId: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  errorMessage?: string | null;
+}): Promise<{ id: string }> => {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<{ id: string }>(
+      `INSERT INTO identities_analyses
+         (batch_id, identity_id, channel, status, payload, model_id,
+          input_tokens, output_tokens, error_message)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
+       RETURNING id::text AS id`,
+      [
+        args.batchId,
+        args.identityId,
+        args.channel,
+        args.status,
+        JSON.stringify(args.payload ?? null),
+        args.modelId,
+        args.inputTokens ?? null,
+        args.outputTokens ?? null,
+        args.errorMessage ?? null,
+      ],
+    );
+    if (args.status === "ok") {
+      await client.query(
+        `INSERT INTO identities_profiles
+           (identity_id, channel, current_analysis_id, updated_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (identity_id, channel)
+         DO UPDATE SET current_analysis_id = EXCLUDED.current_analysis_id,
+                       updated_at = now()`,
+        [args.identityId, args.channel, rows[0].id],
+      );
+    }
+    await client.query("COMMIT");
+    return rows[0];
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+};
+
+// Idempotence : retourne l'analyse existante (la plus récente) pour
+// (batch, identity, channel). Sert à éviter le re-billing si l'UI relance
+// par erreur le même slot — cf. P1 sur /identities/analyze/:batchId/:identityId.
+export const findIdentityAnalysis = async (
+  batchId: string,
+  identityId: string,
+  channel: IdentityChannel,
+): Promise<IdentityAnalysisRow | null> => {
+  const { rows } = await getPool().query<IdentityAnalysisRow>(
+    `SELECT id::text AS id,
+            batch_id::text AS batch_id,
+            identity_id, channel, status, payload,
+            model_id::text AS model_id,
+            input_tokens, output_tokens, error_message,
+            created_at::text AS created_at
+       FROM identities_analyses
+       WHERE batch_id = $1 AND identity_id = $2 AND channel = $3
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    [batchId, identityId, channel],
+  );
+  return rows[0] ?? null;
+};
+
+export interface IdentityProfileSummary {
+  identity_id: string;
+  channel: IdentityChannel;
+  current_analysis_id: string | null;
+  updated_at: string;
+  status: IdentityAnalysisStatus | null;
+  msg_count_sender: number | null;
+  conv_count: number | null;
+  sampled_at: string | null;
+  model_label: string | null;
+}
+
+export const listIdentityProfiles = async (
+  page: number,
+  pageSize: number,
+): Promise<{ rows: IdentityProfileSummary[]; total: number }> => {
+  const offset = (page - 1) * pageSize;
+  const p = getPool();
+  const totalRes = await p.query<{ n: string }>(
+    "SELECT count(*)::text AS n FROM identities_profiles",
+  );
+  const { rows } = await p.query<IdentityProfileSummary>(
+    `SELECT pr.identity_id,
+            pr.channel,
+            pr.current_analysis_id::text AS current_analysis_id,
+            pr.updated_at::text          AS updated_at,
+            a.status,
+            (a.payload->'corpus'->>'msg_count_sender')::int AS msg_count_sender,
+            (a.payload->'corpus'->>'conv_count')::int       AS conv_count,
+            a.payload->'corpus'->>'sampled_at'              AS sampled_at,
+            m.label AS model_label
+       FROM identities_profiles pr
+       LEFT JOIN identities_analyses a ON a.id = pr.current_analysis_id
+       LEFT JOIN models m ON m.id = a.model_id
+      ORDER BY pr.updated_at DESC
+      LIMIT $1 OFFSET $2`,
+    [pageSize, offset],
+  );
+  return { rows, total: parseInt(totalRes.rows[0].n, 10) };
+};
+
+export interface IdentityProfileDetail {
+  identity_id: string;
+  channel: IdentityChannel;
+  current_analysis_id: string | null;
+  updated_at: string;
+  current: IdentityAnalysisRow | null;
+  history: IdentityAnalysisRow[];
+}
+
+export const getIdentityProfile = async (
+  identityId: string,
+  channel: IdentityChannel,
+): Promise<IdentityProfileDetail | null> => {
+  const p = getPool();
+  const profRes = await p.query<{
+    identity_id: string;
+    channel: IdentityChannel;
+    current_analysis_id: string | null;
+    updated_at: string;
+  }>(
+    `SELECT identity_id, channel,
+            current_analysis_id::text AS current_analysis_id,
+            updated_at::text          AS updated_at
+       FROM identities_profiles
+       WHERE identity_id = $1 AND channel = $2`,
+    [identityId, channel],
+  );
+  if (profRes.rows.length === 0) return null;
+  const prof = profRes.rows[0];
+
+  const histRes = await p.query<IdentityAnalysisRow>(
+    `SELECT id::text AS id,
+            batch_id::text AS batch_id,
+            identity_id, channel, status, payload,
+            model_id::text AS model_id,
+            input_tokens, output_tokens, error_message,
+            created_at::text AS created_at
+       FROM identities_analyses
+       WHERE identity_id = $1 AND channel = $2
+       ORDER BY created_at DESC
+       LIMIT 50`,
+    [identityId, channel],
+  );
+  const current = prof.current_analysis_id
+    ? histRes.rows.find((r) => r.id === prof.current_analysis_id) ?? null
+    : null;
+
+  return {
+    identity_id: prof.identity_id,
+    channel: prof.channel,
+    current_analysis_id: prof.current_analysis_id,
+    updated_at: prof.updated_at,
+    current,
+    history: histRes.rows,
+  };
+};
+
+// Conversations utilisées (visitées) pour le profil courant — extraites du
+// payload (champ corpus.conversation_ids si présent), ou liste vide. Sert à
+// la section "Conversations de l'identité" du ProfileDetail (lien vers
+// ConversationDetail existant).
+export const listConversationsByIdentity = async (
+  identityId: string,
+  channel: IdentityChannel,
+): Promise<{ conversation_id: string; sampled_at: string | null }[]> => {
+  const { rows } = await getPool().query<{
+    conv_ids: string[] | null;
+    sampled_at: string | null;
+  }>(
+    `SELECT a.payload->'corpus'->'conversation_ids' AS conv_ids,
+            a.payload->'corpus'->>'sampled_at'      AS sampled_at
+       FROM identities_profiles pr
+       JOIN identities_analyses a ON a.id = pr.current_analysis_id
+       WHERE pr.identity_id = $1 AND pr.channel = $2`,
+    [identityId, channel],
+  );
+  if (rows.length === 0) return [];
+  const r = rows[0];
+  const list = Array.isArray(r.conv_ids) ? r.conv_ids : [];
+  // P17: le JSONB peut contenir n'importe quoi (anciens payloads, manip
+  // manuelle) — un cast naïf via String() transforme un objet en
+  // "[object Object]". On garde uniquement les vraies ObjectId-strings.
+  const HEX24 = /^[a-f0-9]{24}$/i;
+  return list
+    .filter((c): c is string => typeof c === "string" && HEX24.test(c))
+    .map((cid) => ({ conversation_id: cid, sampled_at: r.sampled_at }));
+};
+
+// Recherche le profil courant d'une (identityId, channel). Retourne le
+// payload (description + metrics) ou null si pas de profil. Utilisé par
+// replyGenerator pour injecter la description dans le prompt et scorer la
+// reply via compareMetrics.
+export interface IdentityProfileCurrent {
+  identity_id: string;
+  channel: IdentityChannel;
+  payload: unknown;
+}
+
+export const getCurrentIdentityProfile = async (
+  identityId: string,
+  channel: IdentityChannel,
+): Promise<IdentityProfileCurrent | null> => {
+  const { rows } = await getPool().query<{ payload: unknown }>(
+    `SELECT a.payload
+       FROM identities_profiles pr
+       JOIN identities_analyses a ON a.id = pr.current_analysis_id
+       WHERE pr.identity_id = $1 AND pr.channel = $2`,
+    [identityId, channel],
+  );
+  if (rows.length === 0) return null;
+  return { identity_id: identityId, channel, payload: rows[0].payload };
 };

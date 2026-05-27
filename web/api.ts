@@ -122,6 +122,9 @@ export interface ConvDetail {
   replies: ReplyRowApi[];
 }
 
+// Forward-declared minimal validation shape — full shape exporté plus bas
+// (au bas du fichier, après les types Identity). On évite la dépendance
+// circulaire en utilisant une interface inline minimaliste ici.
 export interface GenerateReplyResp {
   conversationId: string;
   replyId: string | null;
@@ -131,6 +134,14 @@ export interface GenerateReplyResp {
   replyText: string | null;
   hasFavorite: boolean;
   vsFavorite: VsCanon;
+  validation?: {
+    score: number | null;
+    breakdown: {
+      length: { verdict: "pass" | "fail" | "skip"; delta_relative: number | null; reply_value: number | null; profile_value: number | null };
+      punctuation: { verdict: "pass" | "fail" | "skip"; delta_relative: number | null; reply_value: number | null; profile_value: number | null };
+      vocab: { verdict: "pass" | "fail" | "skip"; delta_relative: number | null; reply_value: number | null; profile_value: number | null };
+    };
+  } | null;
 }
 
 export interface ReplyListItem {
@@ -140,6 +151,12 @@ export interface ReplyListItem {
   is_favorite: boolean;
   created_at: string;
   preview: string;
+  // Champs ajoutés pour permettre d'identifier l'émetteur dans la liste sans
+  // ouvrir la conv. `identity_label` = firstname+lastname ou email (Mongo).
+  // `null` quand la reply pré-date la feature stylométrie ou que Mongo a planté.
+  identity_id: string | null;
+  channel: "LINKEDIN" | "EMAIL" | null;
+  identity_label: string | null;
 }
 
 export type PromptKind = "analysis" | "reply";
@@ -394,3 +411,145 @@ export const deleteBatch = async (
   );
   return { deletedAnalyses: data.deletedAnalyses };
 };
+
+// ---------- Identity stylometric profiles (LAGM-16436) ----------
+export type IdentityChannel = "LINKEDIN" | "EMAIL";
+
+export interface IdentityProfileDescription {
+  register: string;
+  cadence: string;
+  punctuation_style: string;
+  openers: string[];
+  closers: string[];
+  signature: string;
+  recurring_expressions: string[];
+  summary: string;
+}
+
+export interface IdentityStyleMetrics {
+  length: {
+    msg_words_avg: number | null;
+    sentence_words_avg: number | null;
+    word_chars_avg: number | null;
+  };
+  vocab: {
+    ttr: number | null;
+    hapax_ratio: number | null;
+    yule_k: number | null;
+  };
+  punctuation_per_100w: Record<string, number>;
+  mfw_top30: { word: string; freq_per_1k: number }[];
+}
+
+export interface IdentityProfilePayload {
+  description: IdentityProfileDescription;
+  metrics: IdentityStyleMetrics;
+  corpus: {
+    conv_count: number;
+    msg_count_sender: number;
+    sampled_at: string;
+    token_cap: number;
+    conversation_ids: string[];
+  };
+}
+
+export interface IdentityBatchRow {
+  id: string;
+  status: "running" | "done" | "aborted";
+  input_count: number;
+  source_ids: string[];
+  token_cap: number;
+  model_id: string | null;
+  model_label: string | null;
+  model_aws_id: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface IdentityProfileSummary {
+  identity_id: string;
+  channel: IdentityChannel;
+  current_analysis_id: string | null;
+  updated_at: string;
+  status: "ok" | "error" | null;
+  msg_count_sender: number | null;
+  conv_count: number | null;
+  sampled_at: string | null;
+  model_label: string | null;
+}
+
+export interface IdentityProfilesListResp {
+  rows: IdentityProfileSummary[];
+  total: number;
+}
+
+export interface IdentityAnalysisRow {
+  id: string;
+  batch_id: string | null;
+  identity_id: string;
+  channel: IdentityChannel;
+  status: "ok" | "error";
+  payload: IdentityProfilePayload | null;
+  model_id: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface IdentityProfileDetail {
+  identity_id: string;
+  channel: IdentityChannel;
+  current_analysis_id: string | null;
+  updated_at: string;
+  current: IdentityAnalysisRow | null;
+  history: IdentityAnalysisRow[];
+}
+
+export interface IdentityAnalyzeRunResp {
+  analysisId: string;
+  identityId: string;
+  channel: IdentityChannel;
+  status: "ok" | "error";
+  payload?: IdentityProfilePayload;
+  error?: string;
+}
+
+// Validation stylométrique d'une reply (cf. /reply/:id). null quand la conv
+// n'a pas (identityId, channel) résolu ou pas de profil disponible.
+export interface ReplyValidationBreakdownDim {
+  verdict: "pass" | "fail" | "skip";
+  delta_relative: number | null;
+  reply_value: number | null;
+  profile_value: number | null;
+}
+export interface ReplyValidation {
+  score: number | null;
+  breakdown: {
+    length: ReplyValidationBreakdownDim;
+    punctuation: ReplyValidationBreakdownDim;
+    vocab: ReplyValidationBreakdownDim;
+  };
+  reply_metrics: IdentityStyleMetrics;
+}
+
+// GET /api/eval/replies/:id — reply + validation recalculée vs profil courant.
+// validation null si la conv n'a pas (identity, channel) résolu, ou pas de
+// profil existant pour ce couple. profile_missing_reason précise le cas.
+export interface ReplyDetailApi {
+  id: string;
+  conversation_id: string;
+  prompt_name: string;
+  reply_text: string;
+  context: Record<string, unknown>;
+  is_favorite: boolean;
+  created_at: string;
+  identity_id: string | null;
+  channel: "LINKEDIN" | "EMAIL" | null;
+  validation: ReplyValidation | null;
+  profile_missing_reason:
+    | "no_identity_or_channel"
+    | "no_profile"
+    | "profile_payload_invalid"
+    | null;
+}

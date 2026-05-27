@@ -6,6 +6,14 @@ import { http, ReplyListItem } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { EmptyState } from "../components/EmptyState";
 import { fmtDateTime } from "../format";
+import { MONO_STACK } from "../theme";
+
+const channelTag = (c: ReplyListItem["channel"]) =>
+  c === "LINKEDIN" ? (
+    <Tag color="blue">LinkedIn</Tag>
+  ) : c === "EMAIL" ? (
+    <Tag color="purple">Email</Tag>
+  ) : null;
 
 export function RepliesList() {
   const { message } = App.useApp();
@@ -68,11 +76,51 @@ export function RepliesList() {
         }}
         columns={[
           {
+            title: "réponse",
+            dataIndex: "id",
+            width: 110,
+            render: (v: string) => (
+              <Link to={`/replies/${v}`}>
+                <code style={{ fontFamily: MONO_STACK }}>#{v}</code>
+              </Link>
+            ),
+          },
+          {
+            title: "profil",
+            dataIndex: "identity_label",
+            width: 220,
+            render: (_: unknown, r: ReplyListItem) => {
+              if (!r.identity_id) {
+                return <Typography.Text type="secondary">—</Typography.Text>;
+              }
+              const dest = `/profiles/${r.identity_id}/${r.channel ?? "LINKEDIN"}`;
+              return (
+                <Link to={dest}>
+                  <Space size={6} direction="vertical" style={{ lineHeight: 1.2 }}>
+                    <Space size={6}>
+                      <Typography.Text strong style={{ fontSize: 13 }}>
+                        {r.identity_label ?? "(sans nom)"}
+                      </Typography.Text>
+                      {channelTag(r.channel)}
+                    </Space>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 11, fontFamily: MONO_STACK }}
+                    >
+                      {r.identity_id}
+                    </Typography.Text>
+                  </Space>
+                </Link>
+              );
+            },
+          },
+          {
             title: "conversation",
             dataIndex: "conversation_id",
+            width: 220,
             render: (v: string) => (
               <Link to={`/conversations/${v}`}>
-                <code>{v}</code>
+                <code style={{ fontSize: 11 }}>{v}</code>
               </Link>
             ),
           },
@@ -83,15 +131,6 @@ export function RepliesList() {
             width: 90,
             render: (v: boolean) =>
               v ? <Tag color="success">retenue</Tag> : "—",
-          },
-          {
-            title: "aperçu",
-            dataIndex: "preview",
-            render: (v: string) => (
-              <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
-                {v}
-              </Typography.Text>
-            ),
           },
           {
             title: "créé",
