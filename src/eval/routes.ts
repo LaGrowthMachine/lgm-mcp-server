@@ -273,6 +273,34 @@ evalRouter.patch(
   }),
 );
 
+// Suppression d'un batch + cascade applicative sur ses analyses.
+// Inconditionnel sur confirmation utilisateur (pas de guard `running`
+// côté serveur — la confirmation modale est autoritaire). Race batch
+// running : les workers concurrents d'un autre onglet peuvent voir leurs
+// POST /analyze/:cid suivants tomber en FK violation, logué côté serveur
+// (trade-off documenté dans le warning du modal).
+evalRouter.delete(
+  "/batches/:id",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "batchId invalide" });
+      return;
+    }
+    // Atomic : DELETE RETURNING détecte l'absence en transaction (pas de
+    // TOCTOU entre un getBatch préalable et le delete).
+    const { deletedAnalyses, batchExisted } = await db.deleteBatch(id);
+    if (!batchExisted) {
+      res.status(404).json({ error: "batch_not_found" });
+      return;
+    }
+    console.error(
+      `[eval] batch_deleted id=${id} deletedAnalyses=${deletedAnalyses}`,
+    );
+    res.json({ ok: true, deletedAnalyses });
+  }),
+);
+
 // ---------- 3 · Conversations ----------
 evalRouter.get(
   "/conversations",

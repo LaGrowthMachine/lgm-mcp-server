@@ -8,13 +8,21 @@ import {
   Tag,
   App,
 } from "antd";
+import { ExclamationCircleOutlined } from "@ant-design/icons";
 import type { TablePaginationConfig } from "antd";
 import { Link, useNavigate } from "react-router-dom";
-import { http, BatchRow, BatchListItem, BatchListResp } from "../api";
+import {
+  http,
+  BatchRow,
+  BatchListItem,
+  BatchListResp,
+  deleteBatch,
+} from "../api";
 import { PromptSelect } from "../PromptSelect";
 import { ModelSelect } from "../ModelSelect";
 import { LGM_COLORS, MONO_STACK } from "../theme";
 import { PageHeader } from "../components/PageHeader";
+import { renderBatchDeleteContent } from "../components/BatchDeleteWarnings";
 import {
   parseConvIds,
   fmtDateTime,
@@ -33,7 +41,9 @@ const statusTag = (s: BatchListItem["status"]) =>
   );
 
 export function Batches() {
-  const { message } = App.useApp();
+  // `modal` via App.useApp() hérite du ConfigProvider (couleurs/locale fr_FR)
+  // — Modal.confirm statique émet un warning AntD 5 et perd le theming LGM.
+  const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const [ids, setIds] = useState(
     () => sessionStorage.getItem("eval.ids") ?? "",
@@ -41,6 +51,9 @@ export function Batches() {
   const [promptSel, setPromptSel] = useState<string>("");
   const [modelSel, setModelSel] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
+  // Id du batch en cours de suppression — empêche le double-click sur la même
+  // row et affiche le loading sur ce bouton uniquement.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [rows, setRows] = useState<BatchListItem[]>([]);
   const [page, setPage] = useState(1);
@@ -100,6 +113,48 @@ export function Batches() {
   const onTableChange = (pag: TablePaginationConfig) => {
     setPage(pag.current ?? 1);
     setPageSize(pag.pageSize ?? 20);
+  };
+
+  // Modal.confirm bloquant — content conditionnel (warning canon + running)
+  // partagé avec BatchDetail.tsx. Pas d'effet de bord avant onOk : si l'user
+  // ferme/annule, aucune requête réseau émise.
+  const confirmDelete = (row: BatchListItem) => {
+    modal.confirm({
+      title: "Supprimer ce batch ?",
+      icon: <ExclamationCircleOutlined style={{ color: LGM_COLORS.warning }} />,
+      content: renderBatchDeleteContent({
+        n_total: row.n_total,
+        n_canon: row.n_canon,
+        status: row.status,
+      }),
+      okType: "danger",
+      okText: "Supprimer",
+      cancelText: "Annuler",
+      onOk: async () => {
+        setDeletingId(row.id);
+        try {
+          const { deletedAnalyses } = await deleteBatch(row.id);
+          message.success(
+            `Batch supprimé (${deletedAnalyses} analyse${
+              deletedAnalyses > 1 ? "s" : ""
+            })`,
+          );
+          await load();
+        } catch (e) {
+          // Mapping FR des codes d'erreur serveur — jamais d'identifiant
+          // technique brut affiché à l'utilisateur.
+          const err = e as { response?: { status?: number } };
+          const status = err.response?.status;
+          if (status === 404) message.error("Batch introuvable");
+          else if (status === 400) message.error("Identifiant de batch invalide");
+          else message.error("Échec de la suppression du batch");
+          // Pas de rethrow : AntD ferme le modal naturellement après onOk,
+          // le toast a déjà notifié.
+        } finally {
+          setDeletingId(null);
+        }
+      },
+    });
   };
 
   return (
@@ -270,6 +325,26 @@ export function Batches() {
             dataIndex: "status",
             width: 100,
             render: statusTag,
+          },
+          {
+            title: "actions",
+            width: 120,
+            align: "right",
+            render: (_: unknown, r: BatchListItem) => (
+              <Button
+                danger
+                size="small"
+                loading={deletingId === r.id}
+                disabled={deletingId !== null && deletingId !== r.id}
+                onClick={(e) => {
+                  // Empêche la propagation au lien sur la row.
+                  e.stopPropagation();
+                  confirmDelete(r);
+                }}
+              >
+                Supprimer
+              </Button>
+            ),
           },
         ]}
       />

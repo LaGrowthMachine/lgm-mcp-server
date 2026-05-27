@@ -10,7 +10,11 @@ import {
   Tooltip,
   App,
 } from "antd";
-import { InfoCircleOutlined, ArrowLeftOutlined } from "@ant-design/icons";
+import {
+  InfoCircleOutlined,
+  ArrowLeftOutlined,
+  ExclamationCircleOutlined,
+} from "@ant-design/icons";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   http,
@@ -18,10 +22,12 @@ import {
   BatchRow,
   BatchAnalysisItem,
   BatchVerdict,
+  deleteBatch,
 } from "../api";
 import { LGM_COLORS } from "../theme";
 import { PageHeader } from "../components/PageHeader";
 import { KpiStat } from "../components/KpiStat";
+import { renderBatchDeleteContent } from "../components/BatchDeleteWarnings";
 import { fmtDateTime, fmtPct, fmtTokens, fmtCost } from "../format";
 
 const MAX_CONCURRENCY = 3;
@@ -83,9 +89,13 @@ export function BatchDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { message } = App.useApp();
+  // `modal` via App.useApp() hérite du ConfigProvider (couleurs, locale fr_FR)
+  // — la version statique Modal.confirm émet un warning AntD 5 et perd le
+  // theming LGM.
+  const { message, modal } = App.useApp();
 
   const [detail, setDetail] = useState<BatchDetailResp | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [notFound, setNotFound] = useState(false);
   // `running` = ce tab a un worker pool actif (pas juste "batch en cours en
   // DB"). Sert à afficher Stop vs Marquer arrêté, et à empêcher un 2e lancer.
@@ -225,12 +235,75 @@ export function BatchDetail() {
     await fetchDetail();
   };
 
+  // Modal.confirm de suppression — content réutilisé depuis Batches.tsx.
+  // Si un pool tourne dans CET onglet (abortRef non null), on coupe d'abord
+  // les workers + axios en vol via abortRef AVANT le DELETE pour garantir
+  // zéro INSERT post-suppression. Pour les pools dans un autre onglet, pas
+  // de cross-tab signal — trade-off documenté dans le warning.
+  const confirmDelete = (): void => {
+    if (!detail) return;
+    const { batch, metrics } = detail;
+    modal.confirm({
+      title: "Supprimer ce batch ?",
+      icon: (
+        <ExclamationCircleOutlined style={{ color: LGM_COLORS.warning }} />
+      ),
+      content: renderBatchDeleteContent({
+        n_total: metrics.n_total,
+        n_canon: metrics.n_canon,
+        status: batch.status,
+      }),
+      okType: "danger",
+      okText: "Supprimer",
+      cancelText: "Annuler",
+      okButtonProps: { loading: deleting },
+      onOk: async () => {
+        setDeleting(true);
+        try {
+          // Coupe locale AVANT le DELETE : signale aux workers via
+          // ctrl.signal.aborted + annule les axios POST /analyze/:cid en
+          // vol. No-op si pas de pool actif (abortRef.current === null).
+          abortRef.current?.abort();
+          const { deletedAnalyses } = await deleteBatch(batch.id);
+          message.success(
+            `Batch supprimé (${deletedAnalyses} analyse${
+              deletedAnalyses > 1 ? "s" : ""
+            })`,
+          );
+          navigate("/batches");
+        } catch (e) {
+          // Mapping FR des codes d'erreur serveur — on n'affiche jamais un
+          // code interne (`batch_not_found`, `batchId invalide`) au user.
+          const err = e as { response?: { status?: number } };
+          const status = err.response?.status;
+          if (status === 404) message.error("Batch introuvable");
+          else if (status === 400) message.error("Identifiant de batch invalide");
+          else message.error("Échec de la suppression du batch");
+          // Pas de rethrow : AntD ferme le modal naturellement après onOk,
+          // le toast a déjà notifié l'utilisateur.
+        } finally {
+          setDeleting(false);
+        }
+      },
+    });
+  };
+
   if (notFound)
     return (
       <Space direction="vertical">
         <PageHeader
           title="Batch introuvable"
           breadcrumb={<Link to="/batches">← Batchs</Link>}
+          description={
+            <Typography.Text type="secondary">
+              Ce batch a été supprimé ou n'existe pas.
+            </Typography.Text>
+          }
+          actions={
+            <Link to="/batches">
+              <Button icon={<ArrowLeftOutlined />}>Retour à la liste</Button>
+            </Link>
+          }
         />
       </Space>
     );
@@ -282,6 +355,9 @@ export function BatchDetail() {
                 <Button danger>Marquer arrêté</Button>
               </Popconfirm>
             )}
+            <Button danger loading={deleting} onClick={confirmDelete}>
+              Supprimer
+            </Button>
             <Link to="/batches">
               <Button icon={<ArrowLeftOutlined />}>Liste</Button>
             </Link>

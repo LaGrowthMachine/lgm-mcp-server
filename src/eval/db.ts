@@ -1106,6 +1106,11 @@ export interface BatchListItem {
   n_no_canon: number;
   n_skipped: number;
   n_error: number;
+  // Nombre d'analyses canon dans ce batch — alimente le warning du modal
+  // de suppression côté UI (perte de canon explicite, pas de re-promotion
+  // automatique). Source : COUNT(*) FILTER (WHERE a.is_canon) agrégé par
+  // batch (cf. BATCH_JOIN_CTE).
+  n_canon: number;
   model_label: string | null;
   n_input_tokens: number | null;
   n_output_tokens: number | null;
@@ -1149,6 +1154,10 @@ export interface BatchMetrics {
   n_skipped: number;
   n_error: number;
   n_with_canon: number;
+  // Nombre d'analyses canon dans ce batch — utilisé par l'UI pour
+  // conditionner le warning "K analyse(s) servent de canon" du modal de
+  // suppression.
+  n_canon: number;
   pass_rate: number | null;
   by_label: LabelBreakdownRow[];
   by_sub_label: LabelBreakdownRow[];
@@ -1274,6 +1283,42 @@ export const updateBatchStatus = async (
   return (rowCount ?? 0) > 0;
 };
 
+// Suppression d'un batch + cascade applicative sur ses analyses.
+// Transaction atomique : on supprime d'abord les analyses (FK
+// `ON DELETE SET NULL` conservée — pas de cascade SQL pour préserver la
+// flexibilité schéma), puis le batch lui-même. ROLLBACK automatique sur
+// erreur entre les deux DELETE. La confirmation utilisateur est autoritaire
+// (pas de guard `status='running'` ici).
+// `batchExisted` = `RETURNING id` du DELETE batches a renvoyé une row :
+// permet à la route de distinguer "supprimé" de "déjà supprimé par
+// quelqu'un d'autre" sans pré-check `getBatch` non-transactionnel.
+export const deleteBatch = async (
+  id: string,
+): Promise<{ deletedAnalyses: number; batchExisted: boolean }> => {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const analysesRes = await client.query(
+      "DELETE FROM analyses WHERE batch_id = $1",
+      [id],
+    );
+    const batchRes = await client.query(
+      "DELETE FROM batches WHERE id = $1 RETURNING id",
+      [id],
+    );
+    await client.query("COMMIT");
+    return {
+      deletedAnalyses: analysesRes.rowCount ?? 0,
+      batchExisted: (batchRes.rowCount ?? 0) > 0,
+    };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+};
+
 export const getBatch = async (id: string): Promise<BatchRow | null> => {
   const { rows } = await getPool().query<BatchRow>(
     `SELECT ${selectBatchColsWithModel}
@@ -1304,6 +1349,9 @@ export const listBatches = async (
               count(*) FILTER (WHERE verdict='no_canon')::int     AS n_no_canon,
               count(*) FILTER (WHERE verdict='skipped')::int      AS n_skipped,
               count(*) FILTER (WHERE verdict='error')::int        AS n_error,
+              -- Analyses canon dans ce batch — alimente le warning du modal
+              -- "K analyse(s) servent de canon pour leur conversation".
+              count(*) FILTER (WHERE is_canon)::int               AS n_canon,
               -- bigint→int : SUM(int) renvoie bigint, qui sort en string
               -- côté node-postgres (perte de typing JS). int est suffisant
               -- (max ~2.1B ; un batch réaliste = 100k conv × 2k tok = 2e8).
@@ -1323,6 +1371,7 @@ export const listBatches = async (
             COALESCE(a.n_no_canon, 0)   AS n_no_canon,
             COALESCE(a.n_skipped, 0)    AS n_skipped,
             COALESCE(a.n_error, 0)      AS n_error,
+            COALESCE(a.n_canon, 0)      AS n_canon,
             a.n_input_tokens,
             a.n_output_tokens,
             a.n_cache_read_tokens,
@@ -1369,6 +1418,10 @@ export const computeBatchMetricsFromRows = (
   let n_skipped = 0;
   let n_error = 0;
   let n_with_canon = 0;
+  // Compte le nombre d'analyses qui SONT canon dans ce batch (≠ n_with_canon
+  // qui compte les analyses dont la conv a un canon, quel qu'il soit). Sert
+  // au warning du modal de suppression — perte explicite si > 0.
+  let n_canon = 0;
   // NULL agrégés : on garde null tant qu'aucun row n'a remonté de tokens /
   // coût (= legacy ou batch tout-skipped). Premier row non-null bascule
   // l'accumulateur en number, et on additionne les autres en COALESCE(0).
@@ -1385,6 +1438,7 @@ export const computeBatchMetricsFromRows = (
   };
   for (const r of rows) {
     if (r.has_canon) n_with_canon++;
+    if (r.is_canon) n_canon++;
     if (r.verdict === "pass") n_pass++;
     else if (r.verdict === "regression") n_regression++;
     else if (r.verdict === "no_canon") n_no_canon++;
@@ -1470,6 +1524,7 @@ export const computeBatchMetricsFromRows = (
     n_skipped,
     n_error,
     n_with_canon,
+    n_canon,
     pass_rate,
     by_label,
     by_sub_label,

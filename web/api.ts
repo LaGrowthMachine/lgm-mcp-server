@@ -196,6 +196,9 @@ export interface BatchListItem {
   n_no_canon: number;
   n_skipped: number;
   n_error: number;
+  // Nombre d'analyses canon dans ce batch — alimente le warning du modal
+  // de suppression (perte de canon pour les conv concernées).
+  n_canon: number;
   model_label: string | null;
   n_input_tokens: number | null;
   n_output_tokens: number | null;
@@ -239,6 +242,9 @@ export interface BatchMetrics {
   n_skipped: number;
   n_error: number;
   n_with_canon: number;
+  // Nombre d'analyses canon dans ce batch — utilisé par l'UI pour
+  // conditionner le warning du modal de suppression.
+  n_canon: number;
   pass_rate: number | null;
   by_label: LabelBreakdownRow[];
   by_sub_label: LabelBreakdownRow[];
@@ -375,4 +381,16 @@ export const updateEndpoint = async (
 
 export const deleteEndpoint = async (id: string): Promise<void> => {
   await http.delete(`/endpoints/${id}`);
+};
+
+// Suppression d'un batch + cascade applicative sur ses analyses (transaction
+// côté serveur). Retourne le nombre d'analyses effectivement supprimées pour
+// alimenter le toast de succès. 404 si batch absent, 400 si UUID invalide.
+export const deleteBatch = async (
+  id: string,
+): Promise<{ deletedAnalyses: number }> => {
+  const { data } = await http.delete<{ ok: true; deletedAnalyses: number }>(
+    `/batches/${id}`,
+  );
+  return { deletedAnalyses: data.deletedAnalyses };
 };
