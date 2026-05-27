@@ -243,11 +243,21 @@ export function Profiles() {
         onRow={(r) => ({ onClick: () => goDetail(r), style: { cursor: "pointer" } })}
         columns={[
           {
-            title: "identityId",
-            dataIndex: "identity_id",
-            render: (v: string, r) => (
-              <Link to={`/profiles/${v}/${r.channel}`}>
-                <code style={{ fontFamily: MONO_STACK }}>{v}</code>
+            title: "profil",
+            dataIndex: "identity_label",
+            render: (_: unknown, r: IdentityProfileSummary) => (
+              <Link to={`/profiles/${r.identity_id}/${r.channel}`}>
+                <Space size={2} direction="vertical" style={{ lineHeight: 1.2 }}>
+                  <Typography.Text strong style={{ fontSize: 13 }}>
+                    {r.identity_label ?? "(sans nom)"}
+                  </Typography.Text>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 11, fontFamily: MONO_STACK }}
+                  >
+                    {r.identity_id}
+                  </Typography.Text>
+                </Space>
               </Link>
             ),
           },

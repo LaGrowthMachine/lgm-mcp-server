@@ -688,6 +688,10 @@ evalRouter.post(
       promptName: gen.promptName,
       replyText: gen.result.replyText,
       context: gen.result.context,
+      modelUuid: resolved.uuid,
+      inputTokens: gen.usage?.inputTokens ?? null,
+      outputTokens: gen.usage?.outputTokens ?? null,
+      cacheReadTokens: gen.usage?.cacheReadInputTokens ?? null,
     });
     const vsFavorite = diffReplies(
       favBefore?.reply_text ?? null,
@@ -818,6 +822,11 @@ evalRouter.get(
       created_at: reply.created_at,
       identity_id: identityId,
       channel: channel,
+      model_label: reply.model_label ?? null,
+      input_tokens: reply.input_tokens ?? null,
+      output_tokens: reply.output_tokens ?? null,
+      cache_read_tokens: reply.cache_read_tokens ?? null,
+      cost_usd: reply.cost_usd ?? null,
       validation,
       profile_missing_reason: profileMissingReason,
     });
@@ -1554,7 +1563,23 @@ evalRouter.get(
       100,
       Math.max(1, parseInt(String(req.query.pageSize ?? "20"), 10) || 20),
     );
-    res.json(await db.listIdentityProfiles(page, pageSize));
+    const { rows, total } = await db.listIdentityProfiles(page, pageSize);
+    // Même contrat que /replies : batch lookup Mongo des libellés humains,
+    // dégradation silencieuse en cas d'erreur (UI affichera l'id brut).
+    const identityIds = rows
+      .map((r) => r.identity_id)
+      .filter((v): v is string => !!v);
+    let labels: Map<string, { label: string | null }> = new Map();
+    try {
+      labels = await fetchIdentityLabels(identityIds);
+    } catch {
+      // labels reste vide → fallback id brut côté UI.
+    }
+    const enriched = rows.map((r) => ({
+      ...r,
+      identity_label: labels.get(r.identity_id)?.label ?? null,
+    }));
+    res.json({ rows: enriched, total });
   }),
 );
 

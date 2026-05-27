@@ -29,7 +29,7 @@ import {
 import { LGM_COLORS, MONO_STACK } from "../theme";
 import { PageHeader } from "../components/PageHeader";
 import { ModelSelect } from "../ModelSelect";
-import { fmtDateTime, fmtPct } from "../format";
+import { fmtCost, fmtDateTime, fmtPct, fmtTokens } from "../format";
 
 const channelTag = (c: "LINKEDIN" | "EMAIL" | null) =>
   c === "LINKEDIN" ? (
@@ -203,8 +203,24 @@ export function ReplyDetail() {
             size={8}
             split={<span style={{ color: LGM_COLORS.border }}>·</span>}
             style={{ fontSize: 12, color: LGM_COLORS.textSecondary }}
+            wrap
           >
             <span>générée {fmtDateTime(data.created_at)}</span>
+            {data.model_label && <span>{data.model_label}</span>}
+            {(data.input_tokens !== null || data.output_tokens !== null) && (
+              <span>
+                {fmtTokens(data.input_tokens)} in /{" "}
+                {fmtTokens(data.output_tokens)} out
+                {data.cost_usd !== null && (
+                  <>
+                    {" — "}
+                    <strong style={{ color: LGM_COLORS.green }}>
+                      {fmtCost(data.cost_usd)}
+                    </strong>
+                  </>
+                )}
+              </span>
+            )}
             {data.identity_id && (
               <Link
                 to={`/profiles/${data.identity_id}/${data.channel ?? "LINKEDIN"}`}

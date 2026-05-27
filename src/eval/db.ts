@@ -166,6 +166,16 @@ export const ensureSchema = async (): Promise<void> => {
       ADD COLUMN IF NOT EXISTS cache_read_tokens  INT;
   `);
 
+  // Idem pour replies : tokens persistés par upsertReply, coût dérivé à la
+  // lecture via LEFT JOIN models. Replies legacy (avant cette feature) ont
+  // tout NULL → cost_usd = NULL → UI "—".
+  await p.query(`
+    ALTER TABLE replies
+      ADD COLUMN IF NOT EXISTS input_tokens       INT,
+      ADD COLUMN IF NOT EXISTS output_tokens      INT,
+      ADD COLUMN IF NOT EXISTS cache_read_tokens  INT;
+  `);
+
   // Métas conversation dénormalisées (cache du transcript), peuplées à
   // l'upsert. Idempotent, non destructif ; lignes legacy = NULL (affichées
   // « — » et exclues des filtres, self-healing à la prochaine ré-analyse).
@@ -266,10 +276,14 @@ export const ensureSchema = async (): Promise<void> => {
       ADD COLUMN IF NOT EXISTS model_id UUID REFERENCES models(id) ON DELETE SET NULL;
     ALTER TABLE batches
       ADD COLUMN IF NOT EXISTS model_id UUID REFERENCES models(id) ON DELETE SET NULL;
+    ALTER TABLE replies
+      ADD COLUMN IF NOT EXISTS model_id UUID REFERENCES models(id) ON DELETE SET NULL;
     CREATE INDEX IF NOT EXISTS analyses_model
       ON analyses (model_id) WHERE model_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS batches_model
       ON batches (model_id) WHERE model_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS replies_model
+      ON replies (model_id) WHERE model_id IS NOT NULL;
   `);
 
   // Seed non-destructif : row "Legacy (claude-sonnet-4-6)" archived pour
@@ -1094,6 +1108,10 @@ export const updateAnalysisClassification = async (
 };
 
 // ---------- réponses ----------
+// Les colonnes tokens / model_id / model_label / cost_usd sont peuplées
+// uniquement par les lecteurs qui font le LEFT JOIN models (getReplyById,
+// listReplies). getFavoriteReply et la query replies dans getConversationDetail
+// ne les renvoient pas — optionnelles pour rester typé strict sans bruit.
 export interface ReplyRow {
   id: string;
   conversation_id: string;
@@ -1102,29 +1120,50 @@ export interface ReplyRow {
   context: unknown;
   is_favorite: boolean;
   created_at: string;
+  model_id?: string | null;
+  model_label?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  cost_usd?: number | null;
 }
 
 // 1 réponse par (conv, version de prompt). Régénérer avec la même version
-// écrase texte + contexte (la favorite éventuelle du slot est conservée).
+// écrase texte + contexte + tokens + model_id (la favorite éventuelle du
+// slot est conservée). Les tokens/model_id sont optionnels : NULL persistés
+// si le caller ne les passe pas (replies pré-feature ou skip path).
 export const upsertReply = async (args: {
   conversationId: string;
   promptName: string;
   replyText: string;
   context: unknown;
+  modelUuid?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  cacheReadTokens?: number | null;
 }): Promise<{ id: string }> => {
   const { rows } = await getPool().query<{ id: string }>(
-    `INSERT INTO replies (conversation_id, prompt_name, reply_text, context)
-     VALUES ($1, $2, $3, $4::jsonb)
+    `INSERT INTO replies (conversation_id, prompt_name, reply_text, context,
+                          model_id, input_tokens, output_tokens, cache_read_tokens)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
      ON CONFLICT (conversation_id, prompt_name)
-     DO UPDATE SET reply_text = EXCLUDED.reply_text,
-                   context    = EXCLUDED.context,
-                   created_at = now()
+     DO UPDATE SET reply_text         = EXCLUDED.reply_text,
+                   context            = EXCLUDED.context,
+                   model_id           = EXCLUDED.model_id,
+                   input_tokens       = EXCLUDED.input_tokens,
+                   output_tokens      = EXCLUDED.output_tokens,
+                   cache_read_tokens  = EXCLUDED.cache_read_tokens,
+                   created_at         = now()
      RETURNING id::text AS id`,
     [
       args.conversationId,
       args.promptName,
       args.replyText,
       JSON.stringify(args.context ?? {}),
+      args.modelUuid ?? null,
+      args.inputTokens ?? null,
+      args.outputTokens ?? null,
+      args.cacheReadTokens ?? null,
     ],
   );
   return rows[0];
@@ -1195,9 +1234,25 @@ export const getReplyById = async (
   replyId: string,
 ): Promise<ReplyRow | null> => {
   const { rows } = await getPool().query<ReplyRow>(
-    `SELECT id::text AS id, conversation_id, prompt_name, reply_text,
-            context, is_favorite, created_at
-     FROM replies WHERE id = $1`,
+    `SELECT r.id::text AS id, r.conversation_id, r.prompt_name, r.reply_text,
+            r.context, r.is_favorite, r.created_at,
+            r.model_id::text AS model_id,
+            m.label AS model_label,
+            r.input_tokens, r.output_tokens, r.cache_read_tokens,
+            CASE
+              WHEN r.input_tokens IS NULL
+               AND r.output_tokens IS NULL THEN NULL
+              WHEN m.price_input_per_mtok IS NULL
+               AND m.price_output_per_mtok IS NULL THEN NULL
+              ELSE
+                COALESCE(r.input_tokens,  0)::numeric / 1e6
+                  * COALESCE(m.price_input_per_mtok,  0)
+              + COALESCE(r.output_tokens, 0)::numeric / 1e6
+                  * COALESCE(m.price_output_per_mtok, 0)
+            END::float8 AS cost_usd
+     FROM replies r
+     LEFT JOIN models m ON m.id = r.model_id
+     WHERE r.id = $1`,
     [replyId],
   );
   return rows[0] ?? null;
@@ -1216,6 +1271,11 @@ export interface ReplyListRow {
   preview: string;
   identity_id: string | null;
   channel: string | null;
+  model_label: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export const listReplies = async (
@@ -1228,12 +1288,26 @@ export const listReplies = async (
     "SELECT count(*)::text AS n FROM replies",
   );
   const { rows } = await p.query<ReplyListRow>(
-    `SELECT id::text AS id, conversation_id, prompt_name, is_favorite,
-            created_at, left(reply_text, 160) AS preview,
-            context->>'identityId' AS identity_id,
-            upper(context->>'channel') AS channel
-     FROM replies
-     ORDER BY created_at DESC
+    `SELECT r.id::text AS id, r.conversation_id, r.prompt_name, r.is_favorite,
+            r.created_at, left(r.reply_text, 160) AS preview,
+            r.context->>'identityId' AS identity_id,
+            upper(r.context->>'channel') AS channel,
+            m.label AS model_label,
+            r.input_tokens, r.output_tokens, r.cache_read_tokens,
+            CASE
+              WHEN r.input_tokens IS NULL
+               AND r.output_tokens IS NULL THEN NULL
+              WHEN m.price_input_per_mtok IS NULL
+               AND m.price_output_per_mtok IS NULL THEN NULL
+              ELSE
+                COALESCE(r.input_tokens,  0)::numeric / 1e6
+                  * COALESCE(m.price_input_per_mtok,  0)
+              + COALESCE(r.output_tokens, 0)::numeric / 1e6
+                  * COALESCE(m.price_output_per_mtok, 0)
+            END::float8 AS cost_usd
+     FROM replies r
+     LEFT JOIN models m ON m.id = r.model_id
+     ORDER BY r.created_at DESC
      LIMIT $1 OFFSET $2`,
     [pageSize, offset],
   );

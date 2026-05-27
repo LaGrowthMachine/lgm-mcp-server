@@ -5,8 +5,8 @@ import { Link } from "react-router-dom";
 import { http, ReplyListItem } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { EmptyState } from "../components/EmptyState";
-import { fmtDateTime } from "../format";
-import { MONO_STACK } from "../theme";
+import { fmtCost, fmtDateTime, fmtTokensCompact } from "../format";
+import { LGM_COLORS, MONO_STACK } from "../theme";
 
 const channelTag = (c: ReplyListItem["channel"]) =>
   c === "LINKEDIN" ? (
@@ -125,6 +125,38 @@ export function RepliesList() {
             ),
           },
           { title: "prompt", dataIndex: "prompt_name", width: 90 },
+          {
+            title: "modèle",
+            dataIndex: "model_label",
+            width: 160,
+            render: (v: string | null) =>
+              v ?? <Typography.Text type="secondary">—</Typography.Text>,
+          },
+          {
+            title: "coût",
+            dataIndex: "cost_usd",
+            width: 140,
+            render: (_: unknown, r: ReplyListItem) => {
+              if (
+                r.cost_usd === null &&
+                r.input_tokens === null &&
+                r.output_tokens === null
+              ) {
+                return <Typography.Text type="secondary">—</Typography.Text>;
+              }
+              return (
+                <Space size={2} direction="vertical" style={{ lineHeight: 1.2 }}>
+                  <Typography.Text strong style={{ color: LGM_COLORS.green }}>
+                    {fmtCost(r.cost_usd)}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    {fmtTokensCompact(r.input_tokens)} in /{" "}
+                    {fmtTokensCompact(r.output_tokens)} out
+                  </Typography.Text>
+                </Space>
+              );
+            },
+          },
           {
             title: "retenue",
             dataIndex: "is_favorite",

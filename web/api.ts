@@ -157,6 +157,13 @@ export interface ReplyListItem {
   identity_id: string | null;
   channel: "LINKEDIN" | "EMAIL" | null;
   identity_label: string | null;
+  // Coût d'inférence : tokens persistés par upsertReply, cost_usd recalculé
+  // à la lecture via JOIN models (NULL si tokens ou prix absents → "—").
+  model_label: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export type PromptKind = "analysis" | "reply";
@@ -476,6 +483,9 @@ export interface IdentityProfileSummary {
   conv_count: number | null;
   sampled_at: string | null;
   model_label: string | null;
+  // Libellé humain résolu depuis Mongo (firstname+lastname ou email). NULL si
+  // identité non retrouvée ou Mongo KO → UI fallback sur identity_id brut.
+  identity_label: string | null;
 }
 
 export interface IdentityProfilesListResp {
@@ -546,6 +556,11 @@ export interface ReplyDetailApi {
   created_at: string;
   identity_id: string | null;
   channel: "LINKEDIN" | "EMAIL" | null;
+  model_label: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cost_usd: number | null;
   validation: ReplyValidation | null;
   profile_missing_reason:
     | "no_identity_or_channel"
