@@ -5,6 +5,7 @@ import { analyzeConversationWithDbPrompt } from "./analyzer";
 import { generateReply } from "./replyGenerator";
 import { diffAnalyses, diffReplies } from "./diff";
 import * as db from "./db";
+import { CSV_BOM, toCsvRow } from "./csv";
 import {
   builtinConfigSchema,
   proxyConfigSchema,
@@ -17,6 +18,75 @@ const asKind = (v: unknown): db.PromptKind =>
 const HEX24 = /^[a-f0-9]{24}$/i;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Format ISO 8601 d'une date Postgres pour le CSV ; non-localisé volontairement
+// (Excel/Sheets/Numbers parsent ISO sans ambiguïté, les libellés FR sont
+// réservés à l'UI via `web/format.ts`).
+const isoOrEmpty = (v: string | null | undefined): string => {
+  if (v == null) return "";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+};
+
+// `cost_usd` est un float8 ; `String(1e-7)` → `"1e-7"`, qu'Excel parse comme du
+// texte. On force une notation décimale à 8 chiffres (~3 décimales de plus que
+// la précision actuelle de la grille tarifaire) pour garder la cellule
+// numérique. NULL → "" (NULL est porteur d'info, jamais 0).
+const fmtCostUsdCsv = (v: number | null | undefined): string => {
+  if (v == null || !Number.isFinite(v)) return "";
+  return v.toFixed(8);
+};
+
+const CONV_CHANNELS = new Set(["LINKEDIN", "EMAIL", "OTHER"]);
+const CONV_SORTS = new Set(["last_at", "first_at", "msg_count", "latest_at"]);
+
+const setCsvHeaders = (
+  res: express.Response,
+  filename: string,
+): void => {
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${filename}"`,
+  );
+};
+
+// Filtres conversations : extraction commune au GET JSON et au GET CSV
+// (mêmes règles de parsing, évite la dérive). `sort`/`dir` ignorés à l'export
+// (l'ordre n'a pas de sens hors page).
+type ConvExportFilters = {
+  favoriteOnly: boolean;
+  hasCanon: boolean | undefined;
+  minMessages: number | undefined;
+  lastRole: string | undefined;
+  channel: string | undefined;
+  sort: string | undefined;
+  dir: "asc" | "desc" | undefined;
+};
+const parseConvFilters = (req: express.Request): ConvExportFilters => {
+  const q = req.query;
+  const minRaw = parseInt(String(q.minMessages ?? ""), 10);
+  // `typeof === "string"` guard : Express renvoie `string | string[] | ParsedQs`
+  // pour les query params répétés ; les caster naïvement via `String()` produit
+  // `"a,b"` (array) ou `"undefined"`, qui passent silencieusement les allowlists.
+  const sortRaw = typeof q.sort === "string" ? q.sort : "";
+  const channelRaw =
+    typeof q.channel === "string" ? q.channel.toUpperCase() : "";
+  return {
+    favoriteOnly: String(q.favorite ?? "") === "1",
+    hasCanon:
+      q.hasCanon === "1" ? true : q.hasCanon === "0" ? false : undefined,
+    minMessages: Number.isFinite(minRaw) && minRaw > 0 ? minRaw : undefined,
+    lastRole:
+      q.lastRole === "LEAD" || q.lastRole === "SENDER" ? q.lastRole : undefined,
+    channel: CONV_CHANNELS.has(channelRaw) ? channelRaw : undefined,
+    sort: CONV_SORTS.has(sortRaw) ? sortRaw : undefined,
+    dir: q.dir === "asc" ? "asc" : q.dir === "desc" ? "desc" : undefined,
+  };
+};
+
+const todayUtcYmd = (): string => new Date().toISOString().slice(0, 10);
 
 const parseUserIds = (raw: string): string[] => {
   let tokens: string[];
@@ -255,6 +325,79 @@ evalRouter.get(
   }),
 );
 
+// Export CSV des analyses d'un batch. UTF-8 + BOM (Excel sur Windows lit
+// CP-1252 sans le BOM). Ordre colonnes figé (cf. spec Design Notes : lecture
+// UX gauche→droite). tokens/cost/canon_label NULL ⇒ cellule vide (jamais 0 —
+// NULL est porteur d'info "pas facturé").
+// Cap export symétrique à `/conversations/export.csv` : les batches sont
+// normalement O(100), mais on protège quand même la mémoire process.
+const BATCH_EXPORT_CAP = 10000;
+evalRouter.get(
+  "/batches/:id/export.csv",
+  wrap(async (req, res) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      res.status(400).type("text/plain").send("invalid batch id");
+      return;
+    }
+    const batch = await db.getBatch(id);
+    if (!batch) {
+      res.status(404).type("text/plain").send("batch not found");
+      return;
+    }
+    const count = await db.countBatchAnalyses(id);
+    if (count > BATCH_EXPORT_CAP) {
+      res
+        .status(413)
+        .type("text/plain")
+        .send(
+          `export too large: ${count} rows, max ${BATCH_EXPORT_CAP}. Contact support.`,
+        );
+      return;
+    }
+    const rows = await db.getBatchAnalyses(id);
+    const header = toCsvRow([
+      "conversation_id",
+      "analysis_id",
+      "status",
+      "is_canon",
+      "created_at",
+      "verdict",
+      "canon_label",
+      "canon_sub_label",
+      "new_label",
+      "new_sub_label",
+      "reason",
+      "input_tokens",
+      "output_tokens",
+      "cache_read_tokens",
+      "cost_usd",
+    ]);
+    const body = rows.map((r) =>
+      toCsvRow([
+        r.conversation_id,
+        r.analysis_id,
+        r.status,
+        r.is_canon,
+        isoOrEmpty(r.created_at),
+        r.verdict,
+        r.canon_label,
+        r.canon_sub_label,
+        r.new_label,
+        r.new_sub_label,
+        r.reason,
+        r.input_tokens,
+        r.output_tokens,
+        r.cache_read_tokens,
+        fmtCostUsdCsv(r.cost_usd),
+      ]),
+    );
+    const csv = CSV_BOM + [header, ...body].join("\r\n");
+    setCsvHeaders(res, `batch-${id}-${todayUtcYmd()}.csv`);
+    res.send(csv);
+  }),
+);
+
 evalRouter.patch(
   "/batches/:id",
   wrap(async (req, res) => {
@@ -311,40 +454,73 @@ evalRouter.get(
       100,
       Math.max(1, parseInt(String(q.pageSize ?? "20"), 10) || 20),
     );
-    const favoriteOnly = String(q.favorite ?? "") === "1";
-    const hasCanon =
-      q.hasCanon === "1" ? true : q.hasCanon === "0" ? false : undefined;
-    const minRaw = parseInt(String(q.minMessages ?? ""), 10);
-    const minMessages =
-      Number.isFinite(minRaw) && minRaw > 0 ? minRaw : undefined;
-    const lastRole =
-      q.lastRole === "LEAD" || q.lastRole === "SENDER"
-        ? q.lastRole
-        : undefined;
-    const channel =
-      typeof q.channel === "string" && q.channel
-        ? q.channel.toUpperCase()
-        : undefined;
-    const sort = ["last_at", "first_at", "msg_count", "latest_at"].includes(
-      String(q.sort),
-    )
-      ? String(q.sort)
-      : undefined;
-    const dir =
-      q.dir === "asc" ? "asc" : q.dir === "desc" ? "desc" : undefined;
+    const filters = parseConvFilters(req);
     res.json(
       await db.listConversations({
         page,
         pageSize,
-        favoriteOnly,
-        hasCanon,
-        minMessages,
-        lastRole,
-        channel,
-        sort,
-        dir,
+        ...filters,
       }),
     );
+  }),
+);
+
+// Export CSV de la liste conversations. Respecte tous les filtres courants
+// (mêmes params que la route JSON) hors page/pageSize : on exporte tout le
+// périmètre filtré. Probe `countConversations` avant fetch : > 10 000 ⇒ 413
+// (cap dur pour éviter d'aspirer la DB en prod).
+const CONV_EXPORT_CAP = 10000;
+evalRouter.get(
+  "/conversations/export.csv",
+  wrap(async (req, res) => {
+    const filters = parseConvFilters(req);
+    const count = await db.countConversations(filters);
+    if (count > CONV_EXPORT_CAP) {
+      res
+        .status(413)
+        .type("text/plain")
+        .send(
+          `export too large: ${count} rows, max ${CONV_EXPORT_CAP}. Filter further.`,
+        );
+      return;
+    }
+    // `pageSize` cappé à 100 côté listConversations ; on contourne en passant
+    // count (>0, sinon `Math.max(1, count)` pour rester un entier positif —
+    // un batch vide reste un export valide avec juste le header).
+    const fetched = await db.listConversations({
+      page: 1,
+      pageSize: Math.max(1, count),
+      ...filters,
+    });
+    const header = toCsvRow([
+      "conversation_id",
+      "is_favorite",
+      "analyses_count",
+      "has_canon",
+      "msg_count",
+      "first_at",
+      "last_at",
+      "latest_at",
+      "last_role",
+      "channels",
+    ]);
+    const body = fetched.rows.map((r) =>
+      toCsvRow([
+        r.conversation_id,
+        r.is_favorite,
+        r.analyses_count,
+        r.has_canon,
+        r.msg_count,
+        isoOrEmpty(r.first_at),
+        isoOrEmpty(r.last_at),
+        isoOrEmpty(r.latest_at),
+        r.last_role,
+        r.channels ? r.channels.join(";") : "",
+      ]),
+    );
+    const csv = CSV_BOM + [header, ...body].join("\r\n");
+    setCsvHeaders(res, `conversations-${todayUtcYmd()}.csv`);
+    res.send(csv);
   }),
 );
 

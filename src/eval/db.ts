@@ -680,16 +680,16 @@ const CONV_SORT_COLS: Record<string, string> = {
   latest_at: "a.latest_at",
 };
 
-export const listConversations = async (
-  f: ConvListFilters,
-): Promise<{
-  rows: ConvListRow[];
-  total: number;
-  metrics: ConvListMetrics;
-}> => {
-  const offset = (f.page - 1) * f.pageSize;
+// Construit le fragment FROM + WHERE partagé par `listConversations` (lecture
+// paginée) et `countConversations` (probe avant export CSV). Extrait pour
+// garantir que les deux chemins consomment exactement les mêmes filtres ;
+// la mutation `args` est volontaire (numérotation `$N` cohérente avec l'ordre
+// d'insertion).
+const buildConvListFrom = (
+  f: Omit<ConvListFilters, "page" | "pageSize" | "sort" | "dir">,
+  args: unknown[],
+): string => {
   const cond: string[] = [];
-  const args: unknown[] = [];
   if (f.favoriteOnly) cond.push("c.is_favorite");
   if (f.hasCanon !== undefined)
     cond.push(`COALESCE(a.canon, false) = $${args.push(f.hasCanon)}`);
@@ -698,10 +698,7 @@ export const listConversations = async (
   if (f.lastRole) cond.push(`c.last_role = $${args.push(f.lastRole)}`);
   if (f.channel) cond.push(`$${args.push(f.channel)} = ANY(c.channels)`);
   const where = cond.length ? `WHERE ${cond.join(" AND ")}` : "";
-  // Sous-requête `a` groupée par conv ⇒ au plus 1 ligne/conv, pas de fan-out :
-  // count(*) = nb de conversations, et les metrics portent sur le set filtré
-  // entier (pas la page).
-  const from = `
+  return `
     FROM conversations c
     LEFT JOIN (
       SELECT conversation_id,
@@ -711,6 +708,21 @@ export const listConversations = async (
       FROM analyses GROUP BY conversation_id
     ) a ON a.conversation_id = c.conversation_id
     ${where}`;
+};
+
+export const listConversations = async (
+  f: ConvListFilters,
+): Promise<{
+  rows: ConvListRow[];
+  total: number;
+  metrics: ConvListMetrics;
+}> => {
+  const offset = (f.page - 1) * f.pageSize;
+  const args: unknown[] = [];
+  // Sous-requête `a` groupée par conv ⇒ au plus 1 ligne/conv, pas de fan-out :
+  // count(*) = nb de conversations, et les metrics portent sur le set filtré
+  // entier (pas la page).
+  const from = buildConvListFrom(f, args);
   const p = getPool();
 
   const mRes = await p.query<{
@@ -762,6 +774,33 @@ export const listConversations = async (
       period_to: m.period_to,
     },
   };
+};
+
+// Probe `count(*)` réutilisant exactement le même WHERE que `listConversations`
+// (via `buildConvListFrom`). Utilisé par l'export CSV pour décider d'un 413
+// avant de matérialiser toutes les rows. Pagination + tri ignorés (count
+// invariant).
+export const countConversations = async (
+  f: Omit<ConvListFilters, "page" | "pageSize" | "sort" | "dir">,
+): Promise<number> => {
+  const args: unknown[] = [];
+  const from = buildConvListFrom(f, args);
+  const { rows } = await getPool().query<{ count: string }>(
+    `SELECT count(*)::text AS count ${from}`,
+    args,
+  );
+  return parseInt(rows[0]?.count ?? "0", 10);
+};
+
+// Probe `count(*)` des analyses d'un batch (cap export-csv). Les batches sont
+// normalement O(100), le cap est de la défense en profondeur contre un
+// éventuel runaway batch surdimensionné.
+export const countBatchAnalyses = async (batchId: string): Promise<number> => {
+  const { rows } = await getPool().query<{ count: string }>(
+    "SELECT count(*)::text AS count FROM analyses WHERE batch_id = $1",
+    [batchId],
+  );
+  return parseInt(rows[0]?.count ?? "0", 10);
 };
 
 export interface AnalysisRow {

@@ -14,6 +14,7 @@ import {
   InfoCircleOutlined,
   ArrowLeftOutlined,
   ExclamationCircleOutlined,
+  DownloadOutlined,
 } from "@ant-design/icons";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -357,6 +358,14 @@ export function BatchDetail() {
             )}
             <Button danger loading={deleting} onClick={confirmDelete}>
               Supprimer
+            </Button>
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={() => {
+                window.location.href = `/api/eval/batches/${id}/export.csv`;
+              }}
+            >
+              Exporter CSV
             </Button>
             <Link to="/batches">
               <Button icon={<ArrowLeftOutlined />}>Liste</Button>

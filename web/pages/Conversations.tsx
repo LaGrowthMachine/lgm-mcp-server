@@ -17,6 +17,7 @@ import {
   StarFilled,
   StarOutlined,
   MessageOutlined,
+  DownloadOutlined,
 } from "@ant-design/icons";
 import { Link } from "react-router-dom";
 import { http, ConvListRow, ConvListMetrics } from "../api";
@@ -43,6 +44,7 @@ export function Conversations() {
   const [channel, setChannel] = useState<string>("");
   const [sort, setSort] = useState("last_at");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -113,11 +115,78 @@ export function Conversations() {
     }
   };
 
+  // Construit le query string d'export depuis l'état filtres courant.
+  // Mêmes params que l'appel JSON, sans page/pageSize (l'export ignore la
+  // pagination). Param `favorite` n'est inclus que si vrai (`0` est l'état
+  // par défaut, pas un filtre actif côté serveur).
+  const buildExportUrl = (): string => {
+    const qs = new URLSearchParams();
+    if (favoriteOnly) qs.set("favorite", "1");
+    if (canonOnly) qs.set("hasCanon", "1");
+    if (minMessages) qs.set("minMessages", String(minMessages));
+    if (lastRole) qs.set("lastRole", lastRole);
+    if (channel) qs.set("channel", channel);
+    if (sort) qs.set("sort", sort);
+    if (dir) qs.set("dir", dir);
+    const s = qs.toString();
+    return s
+      ? `/api/eval/conversations/export.csv?${s}`
+      : "/api/eval/conversations/export.csv";
+  };
+
+  // Télécharge le CSV via fetch+blob plutôt que `window.location.href` : ça
+  // permet d'intercepter un 413 (cap dépassé) et d'afficher un toast plutôt
+  // que de remplacer la SPA par la page d'erreur plaintext. Le cookie de
+  // session OAuth est porté nativement (même origine).
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const resp = await fetch(buildExportUrl(), { credentials: "include" });
+      if (resp.status === 413) {
+        const text = await resp.text();
+        message.error(text || "Export trop volumineux : filtre davantage.");
+        return;
+      }
+      if (!resp.ok) {
+        message.error(`Export impossible (HTTP ${resp.status}).`);
+        return;
+      }
+      const blob = await resp.blob();
+      const disposition = resp.headers.get("Content-Disposition") ?? "";
+      const filename =
+        disposition.match(/filename="([^"]+)"/)?.[1] ??
+        `conversations-${new Date().toISOString().slice(0, 10)}.csv`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      message.error(
+        err instanceof Error ? err.message : "Export impossible (réseau).",
+      );
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <PageHeader
         title="Conversations"
         description="Bibliothèque des conversations analysées. Marque-en une en favorite pour la retrouver vite, et définis-lui un canon (analyse de référence) pour qu'elle soit comparée dans les batchs."
+        actions={
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exporting}
+            onClick={exportCsv}
+          >
+            Exporter CSV
+          </Button>
+        }
       />
 
       <Space wrap size="middle">
