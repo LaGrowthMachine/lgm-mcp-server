@@ -141,6 +141,7 @@ All LGM Skills are available at:
 | `save_identity_preference` | Save tone/language/style for AI-generated content |
 | `create_audience_from_linkedin_url` | Create or populate an audience from a LinkedIn / Sales Nav search or post URL |
 | `list_identities` | List your connected LinkedIn / email identities — needed to pick an `identityId` |
+| `explore_db` | Admin-only: natural-language MongoDB exploration via server-side agent |
 
 ---
 

@@ -1,8 +1,15 @@
 node_modules/
 dist/
+web-dist/
 .env
 .env.*
+!.env.example
 *.log
+.playwright-cli/
 docker-compose.override.yml
 .DS_Store
 *.mcpb
+
+# Sorties BMAD / harness éval — buffer de travail local, NE PAS committer
+# (inclut les données d'entrée clients PII : emails, sociétés).
+_bmad-output/

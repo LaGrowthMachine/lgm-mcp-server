@@ -89,6 +89,10 @@
     {
       "name": "list_identities",
       "description": "List all connected identities (LinkedIn / email) for the authenticated user."
+    },
+    {
+      "name": "explore_db",
+      "description": "Explore the LGM MongoDB with a natural-language brief (admin only @lagrowthmachine.com). Server-side agent runs read-only queries via a validated AST proxy."
     }
   ],
   "keywords": [
