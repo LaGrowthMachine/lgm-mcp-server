@@ -166,7 +166,7 @@ export interface ReplyListItem {
   cost_usd: number | null;
 }
 
-export type PromptKind = "analysis" | "reply";
+export type PromptKind = "analysis" | "reply" | "identity_profile";
 export type PromptStatus = "draft" | "validated";
 
 export interface PromptListItem {

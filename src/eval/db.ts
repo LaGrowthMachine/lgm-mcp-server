@@ -13,11 +13,16 @@ import {
   CODE_DEFAULT_REPLY_PROMPT_BODY,
   CODE_DEFAULT_REPLY_PROMPT_NAME,
 } from "./replyPromptDefault";
+import {
+  CODE_DEFAULT_IDENTITY_PROFILE_PROMPT_BODY,
+  CODE_DEFAULT_IDENTITY_PROFILE_PROMPT_NAME,
+} from "./identityProfilePromptDefault";
 
-// 2 familles de prompts versionnés indépendamment : 'analysis' (classifier)
-// et 'reply' (génération de réponse, playbook DG). Même mécanique CRUD /
+// 3 familles de prompts versionnés indépendamment : 'analysis' (classifier),
+// 'reply' (génération de réponse, playbook DG) et 'identity_profile'
+// (description stylométrique d'une identité). Même mécanique CRUD /
 // version / actif, scoppée par `kind`.
-export type PromptKind = "analysis" | "reply";
+export type PromptKind = "analysis" | "reply" | "identity_profile";
 
 // Postgres : add-on Heroku (DATABASE_URL) en prod, docker local sinon.
 // EVAL_DATABASE_URL prend le pas si défini (override explicite).
@@ -363,6 +368,11 @@ export const ensureSchema = async (): Promise<void> => {
     CODE_DEFAULT_REPLY_PROMPT_NAME,
     CODE_DEFAULT_REPLY_PROMPT_BODY,
   );
+  await seed(
+    "identity_profile",
+    CODE_DEFAULT_IDENTITY_PROFILE_PROMPT_NAME,
+    CODE_DEFAULT_IDENTITY_PROFILE_PROMPT_BODY,
+  );
 
   // Endpoint seeding lives outside the app: `scripts/seed-endpoints.sql`
   // (run via `npm run seed:endpoints`). The DB is the source of truth and
@@ -437,18 +447,29 @@ export interface PromptRow {
   updated_at: string;
 }
 
+// Table consommatrice du prompt par famille. NULL = la famille n'a aucune
+// table où le `prompt_name` est tracé en colonne ; le flag `used` est alors
+// systématiquement false (cf. identity_profile : les analyses d'identité ne
+// persistent pas le prompt_name, par décision spec).
+const usedTableForKind = (kind: PromptKind): string | null => {
+  if (kind === "reply") return "replies";
+  if (kind === "analysis") return "analyses";
+  return null;
+};
+
 // `kind` par défaut 'analysis' : conserve la compat des appelants existants
 // (analyzer.ts appelle getActivePrompt() sans argument).
 export const listPrompts = async (
   kind: PromptKind = "analysis",
 ): Promise<(Omit<PromptRow, "body"> & { used: boolean })[]> => {
-  const usedTable = kind === "reply" ? "replies" : "analyses";
+  const usedTable = usedTableForKind(kind);
+  const usedExpr = usedTable
+    ? `EXISTS(SELECT 1 FROM ${usedTable} u WHERE u.prompt_name = p.name)`
+    : "false";
   const { rows } = await getPool().query(
     `SELECT p.kind, p.name, p.is_active, p.status, p.validated_at,
             p.created_at, p.updated_at,
-            EXISTS(
-              SELECT 1 FROM ${usedTable} u WHERE u.prompt_name = p.name
-            ) AS used
+            ${usedExpr} AS used
      FROM prompts p WHERE p.kind = $1 ORDER BY p.created_at DESC`,
     [kind],
   );
@@ -480,11 +501,14 @@ export const getActivePrompt = async (
 
 // Un prompt est « utilisé » dès qu'une analyse/réponse porte son nom →
 // non supprimable (traçabilité). L'édition reste régie par le statut.
+// Si la famille n'a pas de table consommatrice trackant prompt_name (ex:
+// identity_profile), `used` est false → suppression libre.
 export const isPromptUsed = async (
   name: string,
   kind: PromptKind = "analysis",
 ): Promise<boolean> => {
-  const table = kind === "reply" ? "replies" : "analyses";
+  const table = usedTableForKind(kind);
+  if (!table) return false;
   const { rows } = await getPool().query<{ used: boolean }>(
     `SELECT EXISTS(
        SELECT 1 FROM ${table} WHERE prompt_name = $1

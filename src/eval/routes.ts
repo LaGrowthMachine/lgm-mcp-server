@@ -17,7 +17,11 @@ import {
 } from "../endpoints/types";
 
 const asKind = (v: unknown): db.PromptKind =>
-  v === "reply" ? "reply" : "analysis";
+  v === "reply"
+    ? "reply"
+    : v === "identity_profile"
+      ? "identity_profile"
+      : "analysis";
 
 const HEX24 = /^[a-f0-9]{24}$/i;
 const UUID_RE =
@@ -1454,12 +1458,21 @@ evalRouter.post(
       return;
     }
 
+    // promptName optionnel : si fourni, force ce prompt précis (kind=
+    // identity_profile, draft accepté pour itérer avant validation). Sinon
+    // resolveIdentityProfilePrompt prend l'actif courant en DB (fallback code
+    // si DB KO). Cohérent avec generateReply.
+    const promptName =
+      typeof req.body?.promptName === "string" && req.body.promptName.trim()
+        ? req.body.promptName.trim()
+        : undefined;
     try {
       const result = await analyzeIdentity({
         identityId,
         channel,
         model: batch.model_aws_id,
         tokenCap: batch.token_cap,
+        promptName,
       });
       const inserted = await db.insertIdentityAnalysis({
         batchId,

@@ -159,6 +159,7 @@ export function Prompts() {
         options={[
           { label: "Analyse", value: "analysis" },
           { label: "Réponse", value: "reply" },
+          { label: "Profil identité", value: "identity_profile" },
         ]}
       />
 
