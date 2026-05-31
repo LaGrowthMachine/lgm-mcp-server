@@ -1,5 +1,6 @@
 import express from "express";
 import axios from "axios";
+import { createHash } from "node:crypto";
 import { IncomingMessage } from "node:http";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -8,6 +9,22 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createMcpServer } from "./server";
 import { requestContext, isAllowedApiUrl, getApiUrl } from "./requestContext";
 import oauthRouter from "./oauth";
+
+// Conversation correlation window for the fallback sessionId. If the
+// client doesn't send Mcp-Session-Id, we hash (apiKey, IP, time bucket)
+// so independent requests within the same window collapse into one
+// "session" for analytics purposes. 30 minutes is conservative — long
+// enough for a typical Claude conversation, short enough to separate
+// unrelated bursts.
+const FALLBACK_SESSION_WINDOW_MS = 30 * 60 * 1000;
+const deriveFallbackSessionId = (apiKey: string, ip: string): string => {
+  const window = Math.floor(Date.now() / FALLBACK_SESSION_WINDOW_MS);
+  const hash = createHash("sha256")
+    .update(`${apiKey}:${ip}:${window}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `tw:${hash}`;
+};
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const TRANSPORT = process.env.LGM_MCP_TRANSPORT || "http";
@@ -84,9 +101,23 @@ const startHttpServer = async () => {
           scopes: [],
         };
 
-        await requestContext.run({ apiUrl: customApiUrl, apiKey }, async () => {
-          await handler(req, res);
-        });
+        // Session correlation: prefer the client's Mcp-Session-Id
+        // header if present (proper MCP session); otherwise derive a
+        // fallback from (apiKey, IP, 30-min window) so analytics can
+        // still cluster calls of a single conversation.
+        const clientSessionId = req.headers["mcp-session-id"] as
+          | string
+          | undefined;
+        const sessionId =
+          clientSessionId ||
+          deriveFallbackSessionId(apiKey, req.ip ?? "unknown");
+
+        await requestContext.run(
+          { apiUrl: customApiUrl, apiKey, sessionId },
+          async () => {
+            await handler(req, res);
+          },
+        );
       } catch (error) {
         console.error("Request context error:", error);
         if (!res.headersSent) {
