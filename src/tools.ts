@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { callFlow, McpFlowError } from "./callFlow";
-import { trackMcpEvent } from "./tracking";
+import { trackToolCall } from "./tracking";
 import { getApiKey } from "./requestContext";
 
 const resolveApiKey = (extra: { authInfo?: { token?: string } }): string => {
@@ -79,9 +79,7 @@ export const registerTools = (server: McpServer) => {
       const apiKey = resolveApiKey(extra);
       try {
         const data = await callFlow(apiKey, "/campaigns", params);
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "list_campaigns",
-        });
+        await trackToolCall(apiKey, "list_campaigns", params);
         return formatTextContent("Campaigns", data);
       } catch (error) {
         return handleToolError(error);
@@ -112,9 +110,7 @@ export const registerTools = (server: McpServer) => {
           apiKey,
           `/campaigns/${params.campaignId}/stats`,
         );
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "get_campaign_stats",
-        });
+        await trackToolCall(apiKey, "get_campaign_stats", params);
         return formatTextContent("Campaign Stats", data);
       } catch (error) {
         return handleToolError(error);
@@ -159,9 +155,7 @@ export const registerTools = (server: McpServer) => {
             limit: params.limit,
           },
         );
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "get_audience_leads",
-        });
+        await trackToolCall(apiKey, "get_audience_leads", params);
         return formatTextContent("Audience Leads", data);
       } catch (error) {
         return handleToolError(error);
@@ -205,9 +199,7 @@ export const registerTools = (server: McpServer) => {
           skip: params.skip,
           limit: params.limit,
         });
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "get_lead_logs",
-        });
+        await trackToolCall(apiKey, "get_lead_logs", params);
         return formatTextContent("Lead Logs", data);
       } catch (error) {
         return handleToolError(error);
@@ -243,9 +235,7 @@ export const registerTools = (server: McpServer) => {
             identityId: params.identityId,
           },
         );
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "get_lead_conversations",
-        });
+        await trackToolCall(apiKey, "get_lead_conversations", params);
         return formatTextContent("Lead Conversations", data);
       } catch (error) {
         return handleToolError(error);
@@ -276,9 +266,7 @@ export const registerTools = (server: McpServer) => {
           apiKey,
           `/conversations/${params.conversationId}/messages`,
         );
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "get_conversation_messages",
-        });
+        await trackToolCall(apiKey, "get_conversation_messages", params);
         return formatTextContent("Conversation Messages", data);
       } catch (error) {
         return handleToolError(error);
@@ -311,9 +299,7 @@ export const registerTools = (server: McpServer) => {
           apiKey,
           `/campaigns/${params.campaignId}/messages`,
         );
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "get_campaign_messages",
-        });
+        await trackToolCall(apiKey, "get_campaign_messages", params);
         return formatTextContent("Campaign Messages", data);
       } catch (error) {
         return handleToolError(error);
@@ -344,9 +330,7 @@ export const registerTools = (server: McpServer) => {
           apiKey,
           `/audiences/${params.audienceId}/detail`,
         );
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "get_audience",
-        });
+        await trackToolCall(apiKey, "get_audience", params);
         return formatTextContent("Audience Detail", data);
       } catch (error) {
         return handleToolError(error);
@@ -393,8 +377,8 @@ export const registerTools = (server: McpServer) => {
           },
           { method: "POST" },
         );
-        await trackMcpEvent(apiKey, "mcp_preference_saved", {
-          toolName: "save_identity_preference",
+        await trackToolCall(apiKey, "save_identity_preference", params, {
+          eventName: "mcp_preference_saved",
         });
         return formatTextContent("Preference Saved", data);
       } catch (error) {
@@ -468,9 +452,7 @@ export const registerTools = (server: McpServer) => {
           },
           { method: "POST" },
         );
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "create_audience_from_linkedin_url",
-        });
+        await trackToolCall(apiKey, "create_audience_from_linkedin_url", params);
         return formatTextContent("Audience Created", data);
       } catch (error) {
         return handleToolError(error);
@@ -494,9 +476,7 @@ export const registerTools = (server: McpServer) => {
       const apiKey = resolveApiKey(extra);
       try {
         const data = await callFlow(apiKey, "/identities");
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "list_identities",
-        });
+        await trackToolCall(apiKey, "list_identities", {});
         return formatTextContent("Identities", data);
       } catch (error) {
         return handleToolError(error);
@@ -691,9 +671,7 @@ export const registerTools = (server: McpServer) => {
       }
       try {
         const data = await callFlow(apiKey, "/leads/search", params);
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "search_lead",
-        });
+        await trackToolCall(apiKey, "search_lead", params);
         return formatTextContent("Lead Search Results", data);
       } catch (error) {
         // The LGM API returns 404 "Lead not found" when no leads match.
@@ -701,9 +679,7 @@ export const registerTools = (server: McpServer) => {
         // as a normal response so the model can say "no matches" without
         // claiming the tool errored.
         if (error instanceof McpFlowError && error.statusCode === 404) {
-          await trackMcpEvent(apiKey, "mcp_tool_called", {
-            toolName: "search_lead",
-          });
+          await trackToolCall(apiKey, "search_lead", params);
           return formatTextContent("Lead Search Results", {
             leads: [],
             matched: 0,
@@ -836,9 +812,7 @@ export const registerTools = (server: McpServer) => {
         const data = await callFlow(apiKey, "/leads", body, {
           method: "POST",
         });
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "create_or_update_lead",
-        });
+        await trackToolCall(apiKey, "create_or_update_lead", params);
         return formatTextContent(
           `Lead upserted in audience "${params.audience}" — find the audience ID via list_audiences to view at ${audienceUrl("{audienceId}")}`,
           data,
@@ -1019,9 +993,7 @@ export const registerTools = (server: McpServer) => {
         const data = await callFlow(apiKey, "/leads/enrich", body, {
           method: "POST",
         });
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "enrich_lead",
-        });
+        await trackToolCall(apiKey, "enrich_lead", params);
         return formatTextContent(
           `Enrich Started (${enrichType}, ~${cost} credits)`,
           {
@@ -1247,9 +1219,7 @@ export const registerTools = (server: McpServer) => {
         if (i < leadIds.length - 1) await sleep(THROTTLE_MS);
       }
 
-      await trackMcpEvent(apiKey, "mcp_tool_called", {
-        toolName: "bulk_enrich_audience",
-      });
+      await trackToolCall(apiKey, "bulk_enrich_audience", params);
 
       const title =
         rateLimitedAt !== null
@@ -1309,9 +1279,7 @@ export const registerTools = (server: McpServer) => {
           apiKey,
           `/leads/enrich/${params.enrichRequestId}`,
         );
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "get_enrich_result",
-        });
+        await trackToolCall(apiKey, "get_enrich_result", params);
         return formatTextContent("Enrich Result", data);
       } catch (error) {
         return handleToolError(error);
@@ -1358,9 +1326,7 @@ export const registerTools = (server: McpServer) => {
           params.pages,
           leadsPerPage,
         );
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "get_all_audience_leads",
-        });
+        await trackToolCall(apiKey, "get_all_audience_leads", params);
         return formatTextContent("Audience Leads (paginated)", {
           audienceId: params.audienceId,
           audienceUrl: audienceUrl(params.audienceId),
@@ -1483,9 +1449,7 @@ export const registerTools = (server: McpServer) => {
       const apiKey = resolveApiKey(extra);
       try {
         const { skills, fetchedAt, stale } = await getSkillsCatalog();
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "discover_lgm_skills",
-        });
+        await trackToolCall(apiKey, "discover_lgm_skills", {});
         return formatTextContent("LGM Skills Catalog", {
           source: "https://github.com/LaGrowthMachine/gtm-system",
           fetchedAt: new Date(fetchedAt).toISOString(),
@@ -1520,9 +1484,7 @@ export const registerTools = (server: McpServer) => {
       const apiKey = resolveApiKey(extra);
       try {
         const data = await callFlow(apiKey, "/credits");
-        await trackMcpEvent(apiKey, "mcp_tool_called", {
-          toolName: "get_credits",
-        });
+        await trackToolCall(apiKey, "get_credits", {});
         return formatTextContent("Credits Balance", data);
       } catch (error) {
         return handleToolError(error);
