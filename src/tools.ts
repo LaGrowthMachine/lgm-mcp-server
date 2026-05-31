@@ -50,7 +50,7 @@ export const registerTools = (server: McpServer) => {
     "list_campaigns",
     {
       description:
-        "List all campaigns for the authenticated user. Use this to get an overview of outreach campaigns, their statuses, and key metrics. Supports filtering by status and pagination.",
+        "List, browse, audit, or analyze all outreach campaigns (sequences, cadences, workflows) for the authenticated La Growth Machine user. Use to get an overview of campaigns and their current status (RUNNING / PAUSED / READY / CANCELED), to find a campaign by name, or as a first step before drilling into a specific campaign's stats or messages. Supports filtering by status, search by name, and pagination. Synonyms: list, browse, audit, analyze, show, get campaigns, outreach sequences, cadences, workflows, prospecting campaigns, sales sequences, status, running, paused, ready, canceled.",
       inputSchema: {
         status: z
           .string()
@@ -94,7 +94,7 @@ export const registerTools = (server: McpServer) => {
     "get_campaign_stats",
     {
       description:
-        "Get detailed statistics for a specific campaign. Returns metrics like total leads, acceptance rate, reply rate, and conversion data. Use campaign ID from list_campaigns.",
+        "Get detailed statistics, performance metrics, KPIs, analytics, or results for a specific outreach campaign — total leads, acceptance rate, reply rate, open rate, click rate, conversion rate, and conversion data. Use after list_campaigns to drill into a single campaign's results, audit its performance, benchmark it, or report on its outcomes. Synonyms: statistics, stats, performance, metrics, KPIs, analytics, results, outcomes, reply rate, acceptance rate, conversion rate, open rate, click rate, campaign report.",
       inputSchema: {
         campaignId: z
           .string()
@@ -127,7 +127,7 @@ export const registerTools = (server: McpServer) => {
     "get_audience_leads",
     {
       description:
-        "Get the list of leads in a specific audience. Returns lead details including name, company, job title, email, and LinkedIn URL. Supports pagination.",
+        "Get the list of leads, contacts, or prospects inside a specific audience (lead list, prospect list, segment). Returns full lead details — name, company, job title, email, LinkedIn URL — with pagination support. Use to export, analyze, or inspect the people inside an audience, or to qualify a list before launching a campaign. Synonyms: leads, contacts, prospects, people, audience members, list members, list contents, who is in this audience, get leads in audience.",
       inputSchema: {
         audienceId: z
           .string()
@@ -174,7 +174,7 @@ export const registerTools = (server: McpServer) => {
     "get_lead_logs",
     {
       description:
-        "Get activity logs for a specific lead. Shows all actions taken on the lead: emails sent, LinkedIn messages, connection requests, and their statuses. Useful for understanding engagement history.",
+        "Get the full activity log, history, or audit trail of every action taken on a specific lead — emails sent, LinkedIn messages, connection requests, profile visits, follow-ups — with their statuses (sent, delivered, failed, accepted, replied). Use to debug why a lead hasn't progressed, audit engagement history, build a timeline of every touchpoint with a prospect, or troubleshoot a stuck lead. Synonyms: activity logs, actions, events, lead history, audit trail, touchpoints, engagement history, lead timeline, what happened to this lead, debug lead.",
       inputSchema: {
         leadId: z.string().describe("The lead ID (24-character hex string)"),
         identityId: z
@@ -220,7 +220,7 @@ export const registerTools = (server: McpServer) => {
     "get_lead_conversations",
     {
       description:
-        "Get all conversations with a specific lead across all channels (LinkedIn, email). Shows conversation status, last message preview, and whether the lead has replied. Use this to find conversation IDs for get_conversation_messages.",
+        "Get all conversations, message threads, or exchanges with a specific lead across all channels (LinkedIn, email). Returns each conversation's status, last message preview, channel, and whether the lead has replied. Use to find conversation IDs to pass into get_conversation_messages, to audit who replied, or to inspect the engagement state of a prospect. Synonyms: conversations, threads, message threads, exchanges, dialog, chats, lead conversations, replies from lead, who replied.",
       inputSchema: {
         leadId: z.string().describe("The lead ID (24-character hex string)"),
         identityId: z
@@ -258,7 +258,7 @@ export const registerTools = (server: McpServer) => {
     "get_conversation_messages",
     {
       description:
-        "Get all messages in a specific conversation. Returns a timeline of sent and received messages with content, sender, channel, and timestamps. Use conversation ID from get_lead_conversations.",
+        "Get the full message history of a specific conversation — a timeline / thread of every sent and received message, with content, sender, channel (LinkedIn, email), and timestamps. Use after get_lead_conversations to read the actual exchange with a prospect, extract their replies, or analyze the dialog. Synonyms: conversation history, messages timeline, message thread, full exchange, dialog, conversation transcript, chat history, read conversation, what did they say.",
       inputSchema: {
         conversationId: z
           .string()
@@ -293,7 +293,7 @@ export const registerTools = (server: McpServer) => {
     "get_campaign_messages",
     {
       description:
-        "Get all message templates for a specific campaign. Returns the sequence of messages (emails, LinkedIn messages) with their HTML content, type, channel, and order. Useful for reviewing or modifying campaign messaging.",
+        "Get all message templates, sequence steps, or campaign copy for a specific outreach campaign. Returns each step (emails, LinkedIn messages, connection notes, voice messages) with HTML content, type, channel, and order in the sequence. Use to review, audit, or extract the messaging of a cadence — for example to copy a working template, debug a sequence, or analyze the copy of a campaign. Synonyms: messages, sequence steps, cadence steps, templates, copy, content, scripts, message templates, campaign messages, campaign copy, review messaging.",
       inputSchema: {
         campaignId: z
           .string()
@@ -326,7 +326,7 @@ export const registerTools = (server: McpServer) => {
     "get_audience",
     {
       description:
-        "Get detailed information about a specific audience. Returns name, description, size, type, and import status. Use audience IDs from list_campaigns results.",
+        "Get detailed information, details, or metadata about a specific audience — name, description, size (leads count), type, and import / scraping status. Use to inspect an audience's metadata, to check how many leads it contains, or to poll its import progress after `create_audience_from_linkedin_url`. Synonyms: audience details, info, metadata, size, leads count, import status, scraping progress, audience summary, inspect audience.",
       inputSchema: {
         audienceId: z
           .string()
@@ -359,7 +359,7 @@ export const registerTools = (server: McpServer) => {
     "save_identity_preference",
     {
       description:
-        'Save a preference for a specific identity. Preferences are key-value pairs organized by category (e.g., "tone", "language", "signature"). Used to personalize AI-generated content for this identity. Max 50 preferences per identity, 500 chars per value.',
+        'Save a preference, setting, or configuration value for a specific identity (LinkedIn / email sender). Preferences are key-value pairs organized by category (e.g., "tone", "language", "signature", "style") and used to personalize AI-generated content (messages, replies, copy) for that identity. Optionally scope a preference to a channel ("linkedin" / "email"). Max 50 preferences per identity, 500 chars per value. Synonyms: preferences, settings, configuration, identity config, sender settings, persona settings, tone, language, signature, style, customize identity.',
       inputSchema: {
         identityId: z
           .string()
@@ -483,7 +483,7 @@ export const registerTools = (server: McpServer) => {
     "list_identities",
     {
       description:
-        "List all connected identities (LinkedIn / email accounts) for the authenticated user. Use the returned identity IDs to call tools that require an `identityId`, like create_audience_from_linkedin_url.",
+        "List all connected identities — LinkedIn accounts, email accounts, senders, mailboxes — for the authenticated La Growth Machine user. Returns each identity's ID, name, channel, and connection status. Use to discover which accounts are connected, to audit available senders, or to grab an identity ID before calling tools that require an `identityId` (e.g., create_audience_from_linkedin_url, save_identity_preference). Synonyms: identities, connected accounts, LinkedIn accounts, email accounts, senders, mailboxes, profiles, my accounts, connected profiles, available senders.",
       inputSchema: {},
       annotations: {
         title: "List Identities",
