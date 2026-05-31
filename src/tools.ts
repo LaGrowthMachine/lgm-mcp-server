@@ -786,7 +786,7 @@ export const registerTools = (server: McpServer) => {
     "enrich_lead",
     {
       description:
-        "Enrich a single lead with pro email and/or LinkedIn profile fields. Three enrichTypes: EMAIL_ENRICH (default, 5 credits, finds pro email) — works without leadId; LINKEDIN_ENRICH (1 credit, fills LinkedIn fields) — REQUIRES leadId; FULL_ENRICH (5 credits, both) — REQUIRES leadId. Always uses polling mode: returns an enrichRequestId you resolve via get_enrich_result. CONFIRMATION REQUIRED: call with `confirm: false` (or omit) first to see a cost-vs-balance preview, then re-call with `confirm: true` to actually spend credits. Identify the lead by leadId (preferred) or firstname+lastname (+ companyName / companyUrl / linkedinUrl to improve matching).",
+        "Enrich a single lead with pro email and/or LinkedIn profile fields. Three enrichTypes: EMAIL_ENRICH (default, up to 5 credits, finds pro email) — works without leadId; LINKEDIN_ENRICH (up to 1 credit, fills LinkedIn fields) — REQUIRES leadId; FULL_ENRICH (up to 5 credits, both) — REQUIRES leadId. Costs shown are upper bounds — LGM may not charge when no enrichment data is found (e.g. status `not_found`). Always uses polling mode: returns an enrichRequestId you resolve via get_enrich_result. CONFIRMATION REQUIRED: call with `confirm: false` (or omit) first to see a cost-vs-balance preview, then re-call with `confirm: true` to actually spend credits. Identify the lead by leadId (preferred) or firstname+lastname (+ companyName / companyUrl / linkedinUrl to improve matching).",
       inputSchema: {
         confirm: z
           .boolean()
@@ -888,7 +888,9 @@ export const registerTools = (server: McpServer) => {
           "Enrich Preview — confirmation required",
           {
             type: enrichType,
-            costCredits: cost,
+            estimatedCostCredits: cost,
+            costNote:
+              "Cost is an upper bound. LGM typically doesn't charge when enrichment finds no data (status `not_found`).",
             target,
             balance: formatBalanceLine(balance),
             verdict,
@@ -936,7 +938,7 @@ export const registerTools = (server: McpServer) => {
     "bulk_enrich_audience",
     {
       description:
-        "Enrich all leads in an audience in one batch. Fetches the audience leads, then loops POST /leads/enrich (polling mode) for each, throttled to respect LGM's 50-calls/10s rate limit. CONFIRMATION REQUIRED: call with `confirm: false` (or omit) first to see total leads × per-lead cost vs current credit balance, then re-call with `confirm: true` to actually run the loop. Returns the audience URL so the user can watch enrichments stream in via the LGM UI. To process more than `limit` leads, re-run with `skip` advanced.",
+        "Enrich all leads in an audience in one batch. Fetches the audience leads, then loops POST /leads/enrich (polling mode) for each, throttled to respect LGM's 50-calls/10s rate limit. CONFIRMATION REQUIRED: call with `confirm: false` (or omit) first to see total leads × per-lead cost vs current credit balance, then re-call with `confirm: true` to actually run the loop. The preview cost is an upper bound — LGM may not charge for leads where enrichment finds no data (e.g. status `not_found`). Returns the audience URL so the user can watch enrichments stream in via the LGM UI. To process more than `limit` leads, re-run with `skip` advanced.",
       inputSchema: {
         audienceId: z
           .string()
@@ -1033,8 +1035,10 @@ export const registerTools = (server: McpServer) => {
             window: { skip, limit },
             leadsToEnrich: n,
             enrichType,
-            perLeadCostCredits: perLeadCost,
-            totalCostCredits: totalCost,
+            estimatedPerLeadCostCredits: perLeadCost,
+            estimatedTotalCostCredits: totalCost,
+            costNote:
+              "Total is an upper bound. LGM typically doesn't charge for leads where enrichment finds no data (status `not_found`), so actual spend may be lower.",
             balance: formatBalanceLine(balance),
             verdict,
             nextStep:
