@@ -89,6 +89,30 @@
     {
       "name": "list_identities",
       "description": "List all connected identities (LinkedIn / email) for the authenticated user."
+    },
+    {
+      "name": "search_lead",
+      "description": "Search for leads by any combination of identifiers (leadId, LinkedIn URL/ID, email, CRM ID, or firstname+lastname+company)."
+    },
+    {
+      "name": "create_or_update_lead",
+      "description": "Create or update a lead (upsert) attached to a required audience. Supports all profile fields and 10 long-text custom attributes."
+    },
+    {
+      "name": "enrich_lead",
+      "description": "Enrich a lead's email and/or LinkedIn profile (EMAIL_ENRICH 5 cr | LINKEDIN_ENRICH 1 cr | FULL_ENRICH 5 cr). Requires explicit confirm=true to spend."
+    },
+    {
+      "name": "bulk_enrich_audience",
+      "description": "Enrich every lead in an audience with one global confirmation. Throttled to respect rate limits; returns audience URL to watch progress live."
+    },
+    {
+      "name": "get_enrich_result",
+      "description": "Retrieve the result of an enrichment request (status + enriched data when completed)."
+    },
+    {
+      "name": "get_credits",
+      "description": "Get the current credit balance for the authenticated account (total + expiring soon)."
     }
   ],
   "keywords": [

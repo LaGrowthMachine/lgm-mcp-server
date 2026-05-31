@@ -50,6 +50,15 @@ View all actions taken on a lead: connection requests sent, messages delivered, 
 **Build audiences from a LinkedIn URL**
 Drop in a LinkedIn search, Sales Navigator search, or LinkedIn post URL — your AI creates the audience and triggers the lead import in one shot.
 
+**Create or update leads — and attach them to an audience**
+Upsert a single lead with all the fields you have (profile, company, custom long-text attributes for personalized messages) and drop it into any audience for tracking.
+
+**Enrich leads with email or LinkedIn data — without surprise spend**
+Find a missing pro email or fill out a LinkedIn profile. Costs are previewed against your live credit balance and every enrichment requires your explicit confirmation — single lead or whole audience.
+
+**Stay on top of your credits**
+Check your credit balance any time, and never enrich without seeing the cost first.
+
 **Personalize AI-generated outreach**
 Save tone and style preferences per La Growth Machine identity, so your AI generates on-brand messages that match your voice.
 
@@ -116,6 +125,30 @@ All LGM Skills are available at:
 
 ---
 
+### Enrich every lead in an audience — with one confirmation
+
+**You:** "Enrich every lead in my 'DACH VPs' audience with full enrichment (LinkedIn + email)."
+
+**AI:** Resolves the audience via `list_audiences`, runs `bulk_enrich_audience` in dry-run mode and reports back: *"Will enrich 25 leads with FULL_ENRICH = 125 credits. You have 1,500. ✅ Sufficient. Audience: app.lagrowthmachine.com/audiences/6a10… — confirm?"* On your **OK**, it re-runs with `confirm: true`, loops every lead under the rate limit, and returns the audience URL so you can watch enrichments stream into LGM live.
+
+---
+
+### Find a lead by company, attach it to an audience, then enrich it
+
+**You:** "Find John Smith at Acme Corp, add him to my 'Acme prospects' audience, and grab his work email."
+
+**AI:** `search_lead(firstname='John', lastname='Smith', companyName='Acme')` → finds the leadId → `create_or_update_lead(leadId, audience='Acme prospects')` to attach → `enrich_lead(leadId, EMAIL_ENRICH)` previews the 5-credit spend against your balance and asks you to confirm. On your **OK**, the enrichment kicks off and Claude reminds you to check the audience page in LGM to see the email populate.
+
+---
+
+### Check your credit balance before a big push
+
+**You:** "How many credits do I have left?"
+
+**AI:** Calls `get_credits` and reports back: *"1,500 total — 200 of those expire soon."*
+
+---
+
 ### Audit your outreach sequence before launch
 
 **You:** "Show me the message flow for my 'DACH Enterprise' campaign — I want to check the timing and content before it goes live."
@@ -141,6 +174,12 @@ All LGM Skills are available at:
 | `save_identity_preference` | Save tone/language/style for AI-generated content |
 | `create_audience_from_linkedin_url` | Create or populate an audience from a LinkedIn / Sales Nav search or post URL |
 | `list_identities` | List your connected LinkedIn / email identities — needed to pick an `identityId` |
+| `search_lead` | Find leads by leadId, LinkedIn URL/ID, email, CRM ID, or firstname + lastname + company |
+| `create_or_update_lead` | Upsert a lead into an audience — all profile fields + 10 long-text custom attributes |
+| `enrich_lead` | Enrich one lead's email and/or LinkedIn profile. Requires `confirm: true` to spend credits |
+| `bulk_enrich_audience` | Enrich every lead in an audience with one global confirmation, throttled, returns audience URL |
+| `get_enrich_result` | Resolve an enrichment request once status is `completed` |
+| `get_credits` | Check your credit balance (total + expiring soon) |
 
 ---
 
