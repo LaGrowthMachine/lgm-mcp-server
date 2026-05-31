@@ -66,24 +66,44 @@ Save tone and style preferences per La Growth Machine identity, so your AI gener
 
 ## Go deeper with LGM Skills
 
-The MCP gives your AI access to your data. **LGM Skills** give it the expertise to act on it.
+The MCP gives your AI access to your LGM data. **LGM Skills** add expert GTM playbooks on top — turn-key prompts that pair with the MCP to run full workflows (sourcing, copy, benchmarking, revenue attribution), not just data fetching.
 
-Skills are specialized AI instructions that work hand-in-hand with this MCP — the MCP surfaces your campaign data, the skill knows how to analyze it and turn it into actionable recommendations.
+All skills live at **[github.com/LaGrowthMachine/gtm-system](https://github.com/LaGrowthMachine/gtm-system)** — the open-source GTM toolkit by La Growth Machine.
 
-### Available now
+### Catalog
 
-**Campaign Analyzer**
-Pulls your campaign stats and sequences via the MCP, then runs a structured analysis to identify what's hurting your reply rate — weak subject lines, poor sequencing, missing follow-ups — and gives you prioritized recommendations to fix it.
+**Fuel my pipeline** — sourcing, list building, ICP
 
-> *"Analyze my 'VP Sales Q2' campaign and tell me what to improve."*
+| Skill | What it does |
+|---|---|
+| [`sales-nav-search-builder`](https://github.com/LaGrowthMachine/gtm-system/blob/main/skills/fuel-my-pipeline/sales-nav-search-builder/SKILL.md) | Turn a natural-language ICP into a precise Sales Navigator search URL — ready to import as an LGM audience via `create_audience_from_linkedin_url`. |
+| [`won-deal-icp-finder`](https://github.com/LaGrowthMachine/gtm-system/blob/main/skills/fuel-my-pipeline/won-deal-icp-finder/SKILL.md) | Audit your biggest closed-won deals to find your proven ICP and a look-alike target list. |
 
-### Coming soon
+**Get qualified meetings** — campaigns, copy, sequences
 
-- **Segmentation Advisor** — Audit your audience targeting and flag ICP mismatches before they hurt performance
-- **Copywriting Coach** — Review your message sequences against outreach best practices and rewrite underperforming steps
+| Skill | What it does |
+|---|---|
+| [`multichannel-campaign-builder`](https://github.com/LaGrowthMachine/gtm-system/blob/main/skills/get-qualified-meetings/multichannel-campaign-builder/SKILL.md) | Generate a complete LinkedIn + email sequence from a natural-language brief. |
+| [`campaign-challenger`](https://github.com/LaGrowthMachine/gtm-system/blob/main/skills/get-qualified-meetings/campaign-challenger/SKILL.md) | Benchmark a campaign's copy against your real history (via `get_campaign_messages` + `get_campaign_stats`) and return prioritized fixes before launch. |
+| [`campaign-impact-analyzer`](https://github.com/LaGrowthMachine/gtm-system/blob/main/skills/get-qualified-meetings/campaign-impact-analyzer/SKILL.md) | Rank campaigns by real revenue impact — cross-references LGM campaigns with HubSpot deals. |
 
-All LGM Skills are available at:
-[lagrowthmachine.com/.well-known/skills/index.json](https://lagrowthmachine.com/.well-known/skills/index.json?utm_source=claude&utm_medium=mcp&utm_campaign=claude-store)
+**Catch opportunities** — reply handling, intent detection · *Coming soon.*
+
+**Secure my channels** — channel health, deliverability, identities · *Coming soon.*
+
+### Install (one line)
+
+```bash
+npx skills add LaGrowthMachine/gtm-system/skills/fuel-my-pipeline/sales-nav-search-builder
+```
+
+Replace the path with any skill from the catalog. Add `-g` for global install. Full instructions and the "without vs with the LGM MCP" value comparison: [gtm-system README](https://github.com/LaGrowthMachine/gtm-system).
+
+### Example flow — Sales Nav search → audience → enrichment
+
+> *"Build me a Sales Nav search for RevOps leaders at EMEA SaaS companies (50–500 employees), import it as a 'RevOps EMEA Q2' audience, and enrich every lead's pro email."*
+
+With `sales-nav-search-builder` + the MCP installed, Claude can chain: build the URL → call `create_audience_from_linkedin_url` → call `bulk_enrich_audience` — end-to-end from a single prompt.
 
 ---
 
