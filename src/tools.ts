@@ -563,14 +563,26 @@ export const registerTools = (server: McpServer) => {
 
   // Pagination model shared by get_all_audience_leads and
   // bulk_enrich_audience: `pages` × `leadsPerPage` (default 100 = API max).
-  // Hard cap of 20 pages = 2000 leads protects against runaway loops and
-  // bounds the credit exposure for bulk_enrich_audience("all").
+  // Two distinct caps:
+  // - PAGES_NUMERIC_CAP: when the user picks a number, we accept 1-20.
+  //   This bounds explicit user choices to a sane range.
+  // - PAGES_ALL_CAP: when the user picks "all", we loop up to 100 pages.
+  //   Higher ceiling because "all" is intentionally exhaustive. At 200 ms
+  //   throttle this is ~20 s of API work in the worst case. For audiences
+  //   larger than this, fall back to get_audience_leads with manual skip.
+  // The lockstep acknowledgedCostCredits guard on bulk_enrich_audience is
+  // the real safety against accidental over-spend — the page caps just
+  // bound API call volume per tool invocation.
   const PAGE_SIZE_DEFAULT = 100;
-  const PAGES_HARD_CAP = 20;
+  const PAGES_NUMERIC_CAP = 20;
+  const PAGES_ALL_CAP = 100;
   const PagesSchema = z
-    .union([z.number().int().min(1).max(PAGES_HARD_CAP), z.literal("all")])
+    .union([
+      z.number().int().min(1).max(PAGES_NUMERIC_CAP),
+      z.literal("all"),
+    ])
     .describe(
-      `How many pages of audience leads to process (each page = leadsPerPage leads, default ${PAGE_SIZE_DEFAULT}). ALWAYS ASK THE USER WHICH VALUE TO USE before calling — options: 1, 2, 5, 10, 20, or 'all'. Never assume. 'all' is capped at ${PAGES_HARD_CAP} pages (${PAGES_HARD_CAP * PAGE_SIZE_DEFAULT} leads max) as a safety ceiling.`,
+      `How many pages of audience leads to process (each page = leadsPerPage leads, default ${PAGE_SIZE_DEFAULT}). ALWAYS ASK THE USER WHICH VALUE TO USE before calling — options: 1, 2, 5, 10, 20, or 'all'. Never assume. Numeric values are capped at ${PAGES_NUMERIC_CAP} pages (${PAGES_NUMERIC_CAP * PAGE_SIZE_DEFAULT} leads). 'all' iterates up to ${PAGES_ALL_CAP} pages (${PAGES_ALL_CAP * PAGE_SIZE_DEFAULT} leads) as a hard safety ceiling — for audiences larger than that, fall back to get_audience_leads with manual skip pagination.`,
     );
 
   const fetchAudienceLeadsPaginated = async (
@@ -585,7 +597,9 @@ export const registerTools = (server: McpServer) => {
     truncated: boolean;
   }> => {
     const maxPages =
-      pages === "all" ? PAGES_HARD_CAP : Math.min(pages, PAGES_HARD_CAP);
+      pages === "all"
+        ? PAGES_ALL_CAP
+        : Math.min(pages, PAGES_NUMERIC_CAP);
     const collected: Array<Record<string, unknown> & { id?: string }> = [];
     let pagesFetched = 0;
     let totalInAudience: number | undefined;
@@ -1128,7 +1142,9 @@ export const registerTools = (server: McpServer) => {
             leadsPerPage,
             leadsToEnrich: n,
             ...(pageResult.truncated
-              ? { truncationNote: `Capped at ${PAGES_HARD_CAP} pages (${PAGES_HARD_CAP * leadsPerPage} leads). Audience has more leads not included in this run.` }
+              ? {
+                  truncationNote: `Fetched ${pageResult.pagesFetched} page${pageResult.pagesFetched > 1 ? "s" : ""} (${n} leads) out of an audience of ${pageResult.totalInAudience}. The remaining ${(pageResult.totalInAudience ?? 0) - n} leads are not in this run — to enrich them, re-call later with skip advanced via get_audience_leads, or filter the audience first.`,
+                }
               : {}),
             enrichType,
             estimatedPerLeadCostCredits: perLeadCost,
@@ -1257,8 +1273,9 @@ export const registerTools = (server: McpServer) => {
             }
           : pageResult.truncated
             ? {
-                moreLeadsRemaining: true,
-                nextStep: `Audience has more leads beyond the ${PAGES_HARD_CAP}-page safety cap. Process them by re-running on a smaller window or filtering the audience.`,
+                moreLeadsRemaining:
+                  (pageResult.totalInAudience ?? 0) - n,
+                nextStep: `Audience has more leads beyond the safety ceiling reached on this run. To enrich the rest, re-run later with skip advanced via get_audience_leads, or filter the audience first.`,
               }
             : {}),
         enrichRequestIds: successes,
@@ -1354,7 +1371,7 @@ export const registerTools = (server: McpServer) => {
           totalInAudience: result.totalInAudience,
           ...(result.truncated
             ? {
-                truncationNote: `Capped at ${PAGES_HARD_CAP} pages (${PAGES_HARD_CAP * leadsPerPage} leads). Audience has more leads not included.`,
+                truncationNote: `Fetched ${result.pagesFetched} page${result.pagesFetched > 1 ? "s" : ""} (${result.leads.length} leads) out of an audience of ${result.totalInAudience}. The remaining ${(result.totalInAudience ?? 0) - result.leads.length} leads are not in this response — use get_audience_leads with skip advanced to retrieve them.`,
               }
             : {}),
           data: result.leads,
