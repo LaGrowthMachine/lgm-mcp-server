@@ -177,7 +177,8 @@ All LGM Skills are available at:
 | `search_lead` | Find leads by leadId, LinkedIn URL/ID, email, CRM ID, or firstname + lastname + company |
 | `create_or_update_lead` | Upsert a lead into an audience — all profile fields + 10 long-text custom attributes |
 | `enrich_lead` | Enrich one lead's email and/or LinkedIn profile. Requires `confirm: true` to spend credits |
-| `bulk_enrich_audience` | Enrich every lead in an audience with one global confirmation, throttled, returns audience URL |
+| `bulk_enrich_audience` | Enrich N pages of leads in an audience (1/2/5/10/20/all). Two-step confirm + lockstep cost check |
+| `get_all_audience_leads` | Auto-paginated fetch of N pages of audience leads in one call |
 | `get_enrich_result` | Resolve an enrichment request once status is `completed` |
 | `get_credits` | Check your credit balance (total + expiring soon) |
 

@@ -559,6 +559,60 @@ export const registerTools = (server: McpServer) => {
   const sleep = (ms: number) =>
     new Promise((resolve) => setTimeout(resolve, ms));
 
+  const THROTTLE_MS = 200; // 5 req/s, well under LGM's 50/10s ceiling
+
+  // Pagination model shared by get_all_audience_leads and
+  // bulk_enrich_audience: `pages` × `leadsPerPage` (default 100 = API max).
+  // Hard cap of 20 pages = 2000 leads protects against runaway loops and
+  // bounds the credit exposure for bulk_enrich_audience("all").
+  const PAGE_SIZE_DEFAULT = 100;
+  const PAGES_HARD_CAP = 20;
+  const PagesSchema = z
+    .union([z.number().int().min(1).max(PAGES_HARD_CAP), z.literal("all")])
+    .describe(
+      `How many pages of audience leads to process (each page = leadsPerPage leads, default ${PAGE_SIZE_DEFAULT}). ALWAYS ASK THE USER WHICH VALUE TO USE before calling — options: 1, 2, 5, 10, 20, or 'all'. Never assume. 'all' is capped at ${PAGES_HARD_CAP} pages (${PAGES_HARD_CAP * PAGE_SIZE_DEFAULT} leads max) as a safety ceiling.`,
+    );
+
+  const fetchAudienceLeadsPaginated = async (
+    apiKey: string,
+    audienceId: string,
+    pages: number | "all",
+    leadsPerPage: number,
+  ): Promise<{
+    leads: Array<Record<string, unknown> & { id?: string }>;
+    pagesFetched: number;
+    totalInAudience: number | undefined;
+    truncated: boolean;
+  }> => {
+    const maxPages =
+      pages === "all" ? PAGES_HARD_CAP : Math.min(pages, PAGES_HARD_CAP);
+    const collected: Array<Record<string, unknown> & { id?: string }> = [];
+    let pagesFetched = 0;
+    let totalInAudience: number | undefined;
+
+    for (let i = 0; i < maxPages; i++) {
+      const skip = i * leadsPerPage;
+      const page = (await callFlow(
+        apiKey,
+        `/audiences/${audienceId}/leads`,
+        { skip, limit: leadsPerPage },
+      )) as Record<string, unknown>;
+      const arr = Array.isArray(page.data)
+        ? (page.data as Array<Record<string, unknown> & { id?: string }>)
+        : [];
+      if (typeof page.total === "number") totalInAudience = page.total;
+      if (arr.length === 0) break;
+      collected.push(...arr);
+      pagesFetched = i + 1;
+      if (arr.length < leadsPerPage) break; // exhausted
+      if (i < maxPages - 1) await sleep(THROTTLE_MS);
+    }
+    const truncated =
+      typeof totalInAudience === "number" &&
+      collected.length < totalInAudience;
+    return { leads: collected, pagesFetched, totalInAudience, truncated };
+  };
+
   // Tool 12: search_lead
   server.registerTool(
     "search_lead",
@@ -786,7 +840,7 @@ export const registerTools = (server: McpServer) => {
     "enrich_lead",
     {
       description:
-        "Enrich a single lead with pro email and/or LinkedIn profile fields. Three enrichTypes: EMAIL_ENRICH (default, up to 5 credits, finds pro email) — works without leadId; LINKEDIN_ENRICH (up to 1 credit, fills LinkedIn fields) — REQUIRES leadId; FULL_ENRICH (up to 5 credits, both) — REQUIRES leadId. Costs shown are upper bounds — LGM may not charge when no enrichment data is found (e.g. status `not_found`). Always uses polling mode: returns an enrichRequestId you resolve via get_enrich_result. CONFIRMATION REQUIRED: call with `confirm: false` (or omit) first to see a cost-vs-balance preview, then re-call with `confirm: true` to actually spend credits. Identify the lead by leadId (preferred) or firstname+lastname (+ companyName / companyUrl / linkedinUrl to improve matching).",
+        "Enrich a single lead with pro email and/or LinkedIn profile fields. Three enrichTypes: EMAIL_ENRICH (default, up to 5 credits, finds pro email) — works without leadId; LINKEDIN_ENRICH (up to 1 credit, fills LinkedIn fields) — REQUIRES leadId; FULL_ENRICH (up to 5 credits, both) — REQUIRES leadId. Costs shown are upper bounds — LGM may not charge when no enrichment data is found (e.g. status `not_found`). Always uses polling mode: returns an enrichRequestId you resolve via get_enrich_result. CONFIRMATION REQUIRED (two-step lockstep): (1) call with `confirm: false` (or omit) to get a cost-vs-balance preview. (2) present the cost to the user and get explicit approval. (3) re-call with BOTH `confirm: true` AND `acknowledgedCostCredits` set to the exact cost from the preview. The tool refuses to spend without this lockstep. Identify the lead by leadId (preferred) or firstname+lastname (+ companyName / companyUrl / linkedinUrl to improve matching).",
       inputSchema: {
         confirm: z
           .boolean()
@@ -829,6 +883,14 @@ export const registerTools = (server: McpServer) => {
           .max(500)
           .optional()
           .describe("LinkedIn profile URL to improve matching"),
+        acknowledgedCostCredits: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            "REQUIRED when confirm=true. Must exactly match the `estimatedCostCredits` value from the dry-run preview. Used as a lockstep guard to prove the cost was surfaced to the user before spending. The tool rejects confirm=true without this field, and rejects mismatched values.",
+          ),
       },
       annotations: {
         title: "Enrich Lead",
@@ -900,6 +962,33 @@ export const registerTools = (server: McpServer) => {
         );
       }
 
+      // Lockstep guard — confirm=true requires acknowledgedCostCredits to
+      // exactly match the per-type cost. This proves the model surfaced the
+      // cost to the user before spending. It cannot be bypassed by passing
+      // confirm=true alone.
+      if (params.acknowledgedCostCredits === undefined) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `enrich_lead refused to spend: when confirm=true, you must also pass acknowledgedCostCredits exactly matching the estimatedCostCredits from the dry-run preview (${cost} for ${enrichType}). Run with confirm=false first to surface the cost to the user, get their explicit OK, then re-call with confirm=true AND acknowledgedCostCredits=${cost}.`,
+            },
+          ],
+          isError: true as const,
+        };
+      }
+      if (params.acknowledgedCostCredits !== cost) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `enrich_lead refused to spend: acknowledgedCostCredits (${params.acknowledgedCostCredits}) does not match the actual cost (${cost} for ${enrichType}). Re-run the dry-run (confirm=false) to get the current cost and re-confirm with the user.`,
+            },
+          ],
+          isError: true as const,
+        };
+      }
+
       // Execute
       const body: Record<string, unknown> = {
         enrichType,
@@ -938,7 +1027,7 @@ export const registerTools = (server: McpServer) => {
     "bulk_enrich_audience",
     {
       description:
-        "Enrich all leads in an audience in one batch. Fetches the audience leads, then loops POST /leads/enrich (polling mode) for each, throttled to respect LGM's 50-calls/10s rate limit. CONFIRMATION REQUIRED: call with `confirm: false` (or omit) first to see total leads × per-lead cost vs current credit balance, then re-call with `confirm: true` to actually run the loop. The preview cost is an upper bound — LGM may not charge for leads where enrichment finds no data (e.g. status `not_found`). Returns the audience URL so the user can watch enrichments stream in via the LGM UI. To process more than `limit` leads, re-run with `skip` advanced.",
+        "Enrich leads in an audience in one batch — N pages worth (each page = leadsPerPage leads). Fetches the leads (auto-paginated), then loops POST /leads/enrich (polling mode) for each, throttled to respect LGM's 50-calls/10s rate limit. TWO USER QUESTIONS REQUIRED before calling: (1) ASK HOW MANY PAGES: 1, 2, 5, 10, 20, or 'all'? Never assume. (2) ASK FOR CONFIRMATION ON COST: run with `confirm: false` first to get a cost-vs-balance preview, surface it to the user, get explicit approval, then re-call with BOTH `confirm: true` AND `acknowledgedCostCredits` exactly matching the preview's estimatedTotalCostCredits. The tool refuses to spend without this lockstep. Preview cost is an upper bound — LGM may not charge for leads where enrichment finds no data (status `not_found`). Returns the audience URL so the user can watch enrichments stream in via the LGM UI.",
       inputSchema: {
         audienceId: z
           .string()
@@ -950,29 +1039,33 @@ export const registerTools = (server: McpServer) => {
           .optional()
           .default("EMAIL_ENRICH")
           .describe(
-            "EMAIL_ENRICH (5 cr/lead) | LINKEDIN_ENRICH (1 cr/lead) | FULL_ENRICH (5 cr/lead). All audience leads have IDs so all three types work here.",
+            "EMAIL_ENRICH (up to 5 cr/lead) | LINKEDIN_ENRICH (up to 1 cr/lead) | FULL_ENRICH (up to 5 cr/lead). All audience leads have IDs so all three types work here.",
           ),
-        skip: z
-          .number()
-          .int()
-          .min(0)
-          .optional()
-          .default(0)
-          .describe("Pagination offset into the audience (default 0)"),
-        limit: z
+        pages: PagesSchema,
+        leadsPerPage: z
           .number()
           .int()
           .min(1)
-          .max(100)
+          .max(PAGE_SIZE_DEFAULT)
           .optional()
-          .default(25)
-          .describe("Number of leads to enrich in this run (min 1, max 100)"),
+          .default(PAGE_SIZE_DEFAULT)
+          .describe(
+            `Leads per page (advanced — default ${PAGE_SIZE_DEFAULT}, the API max). Lower it to enrich smaller windows.`,
+          ),
         confirm: z
           .boolean()
           .optional()
           .default(false)
           .describe(
-            "Set to true to actually spend credits and run the loop. When false (default), returns a preview only.",
+            "Set to true to actually spend credits and run the enrich loop. When false (default), returns a preview only. When true, acknowledgedCostCredits is also required.",
+          ),
+        acknowledgedCostCredits: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            "REQUIRED when confirm=true. Must exactly match the `estimatedTotalCostCredits` value from the dry-run preview. Used as a lockstep guard to prove the cost was surfaced to the user before spending. The tool rejects confirm=true without this field, and rejects mismatched values (which can happen if the lead count changed since the dry-run).",
           ),
       },
       annotations: {
@@ -983,44 +1076,42 @@ export const registerTools = (server: McpServer) => {
     async (params, extra) => {
       const apiKey = resolveApiKey(extra);
       const enrichType = (params.enrichType ?? "EMAIL_ENRICH") as EnrichType;
-      const limit = params.limit ?? 25;
-      const skip = params.skip ?? 0;
+      const leadsPerPage = params.leadsPerPage ?? PAGE_SIZE_DEFAULT;
       const url = audienceUrl(params.audienceId);
 
-      // Fetch leads (used for both preview and execution)
-      let leadsResponse: Record<string, unknown>;
+      // Fetch leads via shared paginator (used for both preview and execute)
+      let pageResult: {
+        leads: Array<Record<string, unknown> & { id?: string }>;
+        pagesFetched: number;
+        totalInAudience: number | undefined;
+        truncated: boolean;
+      };
       try {
-        leadsResponse = (await callFlow(
+        pageResult = await fetchAudienceLeadsPaginated(
           apiKey,
-          `/audiences/${params.audienceId}/leads`,
-          { skip, limit },
-        )) as Record<string, unknown>;
+          params.audienceId,
+          params.pages,
+          leadsPerPage,
+        );
       } catch (error) {
         return handleToolError(error);
       }
 
-      const leadsArray = Array.isArray(leadsResponse.data)
-        ? (leadsResponse.data as Array<{ id?: string }>)
-        : [];
-      const totalInAudience =
-        typeof leadsResponse.total === "number"
-          ? leadsResponse.total
-          : undefined;
-      const leadIds = leadsArray
+      const leadIds = pageResult.leads
         .map((l) => l.id)
         .filter((id): id is string => Boolean(id));
       const n = leadIds.length;
       const perLeadCost = ENRICH_COSTS[enrichType];
       const totalCost = n * perLeadCost;
 
-      // Confirm-gate
+      // Confirm-gate (dry-run)
       if (!params.confirm) {
         const balance = await fetchCreditsBalance(apiKey);
         const sufficient =
           balance?.total !== undefined ? balance.total >= totalCost : null;
         const verdict =
           n === 0
-            ? "Status: nothing to enrich (no leads at this skip/limit)."
+            ? "Status: nothing to enrich (audience has no leads on the requested pages)."
             : sufficient === null
               ? "Status: balance unknown — proceed with caution."
               : sufficient
@@ -1031,9 +1122,14 @@ export const registerTools = (server: McpServer) => {
           {
             audienceId: params.audienceId,
             audienceUrl: url,
-            audienceTotalLeads: totalInAudience,
-            window: { skip, limit },
+            audienceTotalLeads: pageResult.totalInAudience,
+            pagesRequested: params.pages,
+            pagesFetched: pageResult.pagesFetched,
+            leadsPerPage,
             leadsToEnrich: n,
+            ...(pageResult.truncated
+              ? { truncationNote: `Capped at ${PAGES_HARD_CAP} pages (${PAGES_HARD_CAP * leadsPerPage} leads). Audience has more leads not included in this run.` }
+              : {}),
             enrichType,
             estimatedPerLeadCostCredits: perLeadCost,
             estimatedTotalCostCredits: totalCost,
@@ -1043,17 +1139,44 @@ export const registerTools = (server: McpServer) => {
             verdict,
             nextStep:
               n === 0
-                ? "Advance `skip` or pick a different audience."
-                : "Re-call bulk_enrich_audience with `confirm: true` to actually spend credits.",
+                ? "Pick a different audience or different pages count."
+                : `Surface the cost to the user, get explicit approval, then re-call with confirm=true AND acknowledgedCostCredits=${totalCost}.`,
           },
         );
+      }
+
+      // Lockstep guard — confirm=true requires acknowledgedCostCredits to
+      // exactly match the just-computed totalCost. This proves the model
+      // surfaced the cost to the user. It cannot be bypassed by passing
+      // confirm=true alone, nor by passing a wrong number.
+      if (params.acknowledgedCostCredits === undefined) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `bulk_enrich_audience refused to spend: when confirm=true, you must also pass acknowledgedCostCredits exactly matching the estimatedTotalCostCredits from the dry-run preview (${totalCost} for ${n} leads × ${enrichType}). Run with confirm=false first to surface the cost to the user, get their explicit OK, then re-call with confirm=true AND acknowledgedCostCredits=${totalCost}.`,
+            },
+          ],
+          isError: true as const,
+        };
+      }
+      if (params.acknowledgedCostCredits !== totalCost) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `bulk_enrich_audience refused to spend: acknowledgedCostCredits (${params.acknowledgedCostCredits}) does not match the current cost (${totalCost} = ${n} leads × ${perLeadCost}). The lead count may have changed since the last dry-run. Re-run the dry-run to get the current cost and re-confirm with the user.`,
+            },
+          ],
+          isError: true as const,
+        };
       }
 
       if (n === 0) {
         return formatTextContent("Bulk Enrich — Nothing to do", {
           audienceId: params.audienceId,
           audienceUrl: url,
-          window: { skip, limit },
+          pagesRequested: params.pages,
           leadsToEnrich: 0,
         });
       }
@@ -1068,7 +1191,6 @@ export const registerTools = (server: McpServer) => {
       }> = [];
       let rateLimitedAt: number | null = null;
       let retryAfter: number | undefined;
-      const THROTTLE_MS = 200; // 5 req/s, well under LGM's 50/10s ceiling
 
       for (let i = 0; i < leadIds.length; i++) {
         const leadId = leadIds[i];
@@ -1122,6 +1244,8 @@ export const registerTools = (server: McpServer) => {
         audienceUrl: url,
         watchLive: "Open the audience URL in LGM to watch enrichments stream in.",
         enrichType,
+        pagesRequested: params.pages,
+        pagesFetched: pageResult.pagesFetched,
         leadsRequested: n,
         successes: successes.length,
         failures: failures.length,
@@ -1129,12 +1253,12 @@ export const registerTools = (server: McpServer) => {
           ? {
               stoppedAfter: rateLimitedAt,
               rateLimitRetryAfterSeconds: retryAfter,
-              nextStep: `Wait ${retryAfter ?? 60}s, then re-run bulk_enrich_audience with skip=${skip + rateLimitedAt} to resume.`,
+              nextStep: `Wait ${retryAfter ?? 60}s, then re-run bulk_enrich_audience to resume on the remaining leads.`,
             }
-          : totalInAudience && skip + n < totalInAudience
+          : pageResult.truncated
             ? {
-                moreLeadsRemaining: totalInAudience - (skip + n),
-                nextStep: `Re-run with skip=${skip + n} to continue.`,
+                moreLeadsRemaining: true,
+                nextStep: `Audience has more leads beyond the ${PAGES_HARD_CAP}-page safety cap. Process them by re-running on a smaller window or filtering the audience.`,
               }
             : {}),
         enrichRequestIds: successes,
@@ -1178,7 +1302,70 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  // Tool 17: get_credits
+  // Tool 17: get_all_audience_leads (auto-paginated)
+  server.registerTool(
+    "get_all_audience_leads",
+    {
+      description:
+        "Fetch N pages worth of leads from an audience in one call, auto-paginated and throttled. Use this instead of get_audience_leads when you want to operate on multiple pages at once (e.g. before bulk_enrich_audience, or to enumerate the whole audience). ALWAYS ASK THE USER WHICH VALUE TO USE for `pages` before calling — options: 1, 2, 5, 10, 20, or 'all'. Never assume. 'all' is capped at 20 pages (2000 leads with default leadsPerPage=100) as a safety ceiling — for larger audiences, fall back to get_audience_leads with manual skip pagination.",
+      inputSchema: {
+        audienceId: z
+          .string()
+          .describe(
+            "Audience ID (24-char hex). Use list_audiences to find it.",
+          ),
+        pages: PagesSchema,
+        leadsPerPage: z
+          .number()
+          .int()
+          .min(1)
+          .max(PAGE_SIZE_DEFAULT)
+          .optional()
+          .default(PAGE_SIZE_DEFAULT)
+          .describe(
+            `Leads per page (advanced — default ${PAGE_SIZE_DEFAULT}, the API max).`,
+          ),
+      },
+      annotations: {
+        title: "Get All Audience Leads (paginated)",
+        readOnlyHint: true,
+      },
+    },
+    async (params, extra) => {
+      const apiKey = resolveApiKey(extra);
+      const leadsPerPage = params.leadsPerPage ?? PAGE_SIZE_DEFAULT;
+      try {
+        const result = await fetchAudienceLeadsPaginated(
+          apiKey,
+          params.audienceId,
+          params.pages,
+          leadsPerPage,
+        );
+        await trackMcpEvent(apiKey, "mcp_tool_called", {
+          toolName: "get_all_audience_leads",
+        });
+        return formatTextContent("Audience Leads (paginated)", {
+          audienceId: params.audienceId,
+          audienceUrl: audienceUrl(params.audienceId),
+          pagesRequested: params.pages,
+          pagesFetched: result.pagesFetched,
+          leadsPerPage,
+          leadsFetched: result.leads.length,
+          totalInAudience: result.totalInAudience,
+          ...(result.truncated
+            ? {
+                truncationNote: `Capped at ${PAGES_HARD_CAP} pages (${PAGES_HARD_CAP * leadsPerPage} leads). Audience has more leads not included.`,
+              }
+            : {}),
+          data: result.leads,
+        });
+      } catch (error) {
+        return handleToolError(error);
+      }
+    },
+  );
+
+  // Tool 18: get_credits
   server.registerTool(
     "get_credits",
     {

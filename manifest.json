@@ -104,7 +104,11 @@
     },
     {
       "name": "bulk_enrich_audience",
-      "description": "Enrich every lead in an audience with one global confirmation. Throttled to respect rate limits; returns audience URL to watch progress live."
+      "description": "Enrich leads in an audience by pages (1/2/5/10/20/all). Two-step confirm (preview + acknowledgedCostCredits lockstep). Throttled, returns audience URL."
+    },
+    {
+      "name": "get_all_audience_leads",
+      "description": "Fetch N pages of audience leads in one auto-paginated call (1/2/5/10/20/all). Ask the user how many pages first."
     },
     {
       "name": "get_enrich_result",
