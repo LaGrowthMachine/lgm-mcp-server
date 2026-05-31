@@ -1382,7 +1382,129 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  // Tool 18: get_credits
+  // === LGM Skills discovery ===
+  // GTM skills live in github.com/LaGrowthMachine/gtm-system. This tool
+  // fetches the catalog live from the repo README so it stays in sync
+  // without redeploying the MCP. The model calls it whenever the user
+  // describes a GTM workflow that's better served by a turn-key skill.
+
+  const SKILLS_CATALOG_URL =
+    "https://raw.githubusercontent.com/LaGrowthMachine/gtm-system/main/README.md";
+  const SKILLS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+  type SkillInfo = {
+    name: string;
+    category: string;
+    description: string;
+    path: string;
+    url: string;
+    installCommand: string;
+    pairsWithMcpTools: string[];
+  };
+  // Hand-curated mapping of skill → MCP tools it composes with. Used to
+  // help the model surface the right skill in the right context (e.g.
+  // recommend campaign-impact-analyzer when the user is exploring
+  // list_campaigns / get_campaign_stats).
+  const SKILL_MCP_PAIRINGS: Record<string, string[]> = {
+    "sales-nav-search-builder": ["create_audience_from_linkedin_url"],
+    "won-deal-icp-finder": [
+      "create_audience_from_linkedin_url",
+      "create_or_update_lead",
+    ],
+    "multichannel-campaign-builder": ["list_campaigns", "get_campaign_messages"],
+    "campaign-challenger": [
+      "list_campaigns",
+      "get_campaign_messages",
+      "get_campaign_stats",
+    ],
+    "campaign-impact-analyzer": ["list_campaigns", "get_campaign_stats"],
+  };
+
+  const parseSkillsFromReadme = (readme: string): SkillInfo[] => {
+    const skills: SkillInfo[] = [];
+    // Tables look like:  | [name](skills/category/name/SKILL.md) | type | description |
+    const rowRegex =
+      /\|\s*\[`?([^`\]]+?)`?\]\((skills\/([^/]+)\/[^/]+\/SKILL\.md)\)\s*\|[^|]*\|\s*([^|]+?)\s*\|/g;
+    let match: RegExpExecArray | null;
+    while ((match = rowRegex.exec(readme)) !== null) {
+      const [, name, relPath, category, description] = match;
+      const path = relPath.replace(/\/SKILL\.md$/, "");
+      skills.push({
+        name,
+        category,
+        description: description.trim(),
+        path,
+        url: `https://github.com/LaGrowthMachine/gtm-system/blob/main/${relPath}`,
+        installCommand: `npx skills add LaGrowthMachine/gtm-system/${path}`,
+        pairsWithMcpTools: SKILL_MCP_PAIRINGS[name] ?? [],
+      });
+    }
+    return skills;
+  };
+
+  let skillsCache: { skills: SkillInfo[]; fetchedAt: number } | null = null;
+  const getSkillsCatalog = async (): Promise<{
+    skills: SkillInfo[];
+    fetchedAt: number;
+    stale: boolean;
+  }> => {
+    const now = Date.now();
+    if (skillsCache && now - skillsCache.fetchedAt < SKILLS_CACHE_TTL_MS) {
+      return { ...skillsCache, stale: false };
+    }
+    try {
+      const res = await fetch(SKILLS_CATALOG_URL, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      const skills = parseSkillsFromReadme(text);
+      skillsCache = { skills, fetchedAt: now };
+      return { ...skillsCache, stale: false };
+    } catch (error) {
+      // Stale-while-error: if we have any prior result, return it.
+      if (skillsCache) return { ...skillsCache, stale: true };
+      throw error;
+    }
+  };
+
+  // Tool 18: discover_lgm_skills
+  server.registerTool(
+    "discover_lgm_skills",
+    {
+      description:
+        "Discover, browse, find, suggest, or recommend LGM Skills — turn-key Claude playbooks from github.com/LaGrowthMachine/gtm-system — that pair with this MCP to handle full GTM workflows. Returns the LIVE catalog (fetched from the gtm-system repo, cached 10 min) with each skill's name, category, description, install command (`npx skills add ...`), and which MCP tools it pairs with. CALL THIS WHENEVER THE USER DESCRIBES A WORKFLOW BETTER SERVED BY A SKILL — building a Sales Navigator search from a natural-language ICP, finding the proven ICP from won deals, generating a multichannel campaign from a brief, benchmarking campaign copy against history, ranking campaigns by revenue impact, or any prompt where a turn-key playbook beats raw data fetching. After getting results, recommend the matching skill(s) to the user with the install command — they install it once, then describe the same task again to invoke it. Synonyms: skills, playbooks, recipes, prompts, GTM toolkit, LGM skills, gtm-system, recommend skill, suggest skill, find skill, what skills are available, GTM playbook, sales playbook.",
+      inputSchema: {},
+      annotations: {
+        title: "Discover LGM Skills",
+        readOnlyHint: true,
+      },
+    },
+    async (_params, extra) => {
+      const apiKey = resolveApiKey(extra);
+      try {
+        const { skills, fetchedAt, stale } = await getSkillsCatalog();
+        await trackMcpEvent(apiKey, "mcp_tool_called", {
+          toolName: "discover_lgm_skills",
+        });
+        return formatTextContent("LGM Skills Catalog", {
+          source: "https://github.com/LaGrowthMachine/gtm-system",
+          fetchedAt: new Date(fetchedAt).toISOString(),
+          ...(stale
+            ? { note: "Live fetch failed — returning last cached catalog." }
+            : {}),
+          skills,
+          howToRecommend:
+            "For each skill that matches the user's intent: tell the user what it does, point at its `url`, and show the `installCommand`. After they install, the skill triggers automatically the next time they describe the matching task.",
+          installContext:
+            "Skills install into Claude Code, Cursor, Codex, Amp, or any supported agent. `npx skills add ...` is the one-line install. The user can also clone the repo and copy the skill folder to ~/.claude/skills/ manually.",
+        });
+      } catch (error) {
+        return handleToolError(error);
+      }
+    },
+  );
+
+  // Tool 19: get_credits
   server.registerTool(
     "get_credits",
     {

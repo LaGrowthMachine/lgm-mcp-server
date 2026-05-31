@@ -117,6 +117,10 @@
     {
       "name": "get_credits",
       "description": "Get the current credit balance for the authenticated account (total + expiring soon)."
+    },
+    {
+      "name": "discover_lgm_skills",
+      "description": "Discover LGM Skills (Claude playbooks from github.com/LaGrowthMachine/gtm-system) that pair with this MCP. Returns live catalog + install commands."
     }
   ],
   "keywords": [

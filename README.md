@@ -201,6 +201,7 @@ With `sales-nav-search-builder` + the MCP installed, Claude can chain: build the
 | `get_all_audience_leads` | Auto-paginated fetch of N pages of audience leads in one call |
 | `get_enrich_result` | Resolve an enrichment request once status is `completed` |
 | `get_credits` | Check your credit balance (total + expiring soon) |
+| `discover_lgm_skills` | Browse the LGM Skills catalog (gtm-system) and get install commands — Claude calls this when a turn-key playbook would help |
 
 ---
 
