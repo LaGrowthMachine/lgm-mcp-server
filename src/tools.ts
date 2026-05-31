@@ -408,7 +408,7 @@ export const registerTools = (server: McpServer) => {
     "create_audience_from_linkedin_url",
     {
       description:
-        "Create a new audience (or populate an existing one) by importing leads from a LinkedIn Regular search URL, a Sales Navigator search URL, or a LinkedIn post URL. The `audience` parameter is a NAME, not an ID — if no audience with that name exists, LGM creates one; if it does, leads are added to it. Requires an `identityId` from list_identities; the underlying LinkedIn account must be connected and the LGM widget open during the import. Import runs asynchronously — poll get_audience to check status.",
+        "Create, build, import, or populate a new audience (lead list, prospect list, segment) by scraping leads from a LinkedIn Regular search URL, a Sales Navigator search URL, or a LinkedIn post URL (likers / commenters). If no audience with the given name exists, LGM creates one; if it does, new leads are appended to it. The `audience` parameter is a NAME, not an ID. Requires an `identityId` from list_identities; the underlying LinkedIn account must be connected and the LGM widget open during the import. Import runs asynchronously — poll get_audience (by ID, found via list_audiences) to check progress. Synonyms: create audience, build audience, import LinkedIn, import Sales Nav, scrape LinkedIn, scrape Sales Navigator, build lead list, build prospect list, populate audience, LinkedIn search to audience, Sales Nav search to audience, audience from search URL, audience from post URL, post engagement audience, likers, commenters.",
       inputSchema: {
         audience: z
           .string()
@@ -483,7 +483,7 @@ export const registerTools = (server: McpServer) => {
     "list_identities",
     {
       description:
-        "List all connected identities (LinkedIn / email accounts) for the authenticated user. Use the returned identity IDs to call tools that require an `identityId`, like create_audience_from_linkedin_url.",
+        "List, browse, show, or discover all connected identities — LinkedIn accounts, email accounts, senders, mailboxes, personas — for the authenticated La Growth Machine user. Returns each identity's ID, name, channel, and connection status. Use to audit which accounts are connected, to grab an identity ID before calling tools that require an `identityId` (e.g. create_audience_from_linkedin_url, save_identity_preference, get_lead_logs / get_lead_conversations filters), or to confirm which sender the user has linked. Synonyms: identities, connected accounts, LinkedIn accounts, email accounts, senders, mailboxes, profiles, personas, connected profiles, my accounts, available senders, who am I sending from.",
       inputSchema: {},
       annotations: {
         title: "List Identities",
@@ -618,7 +618,7 @@ export const registerTools = (server: McpServer) => {
     "search_lead",
     {
       description:
-        "Search for leads in the authenticated account by any combination of identifiers. At least one criterion is REQUIRED. Matching priority: leadId > crmId > LinkedIn (linkedinId > linkedinPublicId > linkedinUrl) > email > firstname+lastname+company. Use the returned `id` field as the `leadId` for tools like enrich_lead and create_or_update_lead. If the response includes `tooManyResults: true`, narrow the search by adding more criteria.",
+        "Search, find, look up, locate, or identify one or more leads (contacts, prospects, people) in the authenticated La Growth Machine account by any combination of identifiers. At least ONE criterion is REQUIRED — leadId, LinkedIn URL / ID / publicId, email (pro or perso), CRM ID, or firstname+lastname (plus company name or URL to disambiguate). Matching priority: leadId > crmId > LinkedIn (linkedinId > linkedinPublicId > linkedinUrl) > email > firstname+lastname+company. Use the returned `id` field as the `leadId` for downstream tools that need it (enrich_lead, create_or_update_lead, get_lead_logs, get_lead_conversations). If the response includes `tooManyResults: true`, narrow the search by adding more criteria. Synonyms: search lead, find lead, lookup lead, locate lead, identify lead, find contact, find prospect, who is this person, lead by email, lead by LinkedIn, lead by CRM ID, retrieve lead, get lead by name, find by URL.",
       inputSchema: {
         leadId: z
           .string()
@@ -706,7 +706,7 @@ export const registerTools = (server: McpServer) => {
     "create_or_update_lead",
     {
       description:
-        "Create a new lead or update an existing one (upsert), attached to the given audience. The `audience` parameter (name, not ID) is REQUIRED — if you don't have one, call list_audiences to pick one or create_audience_from_linkedin_url to create one. The lead must be identified by AT LEAST ONE of: leadId, proEmail, persoEmail, linkedinUrl, twitter, OR firstname+lastname (plus companyName or companyUrl to disambiguate). All other profile fields are optional. Custom attributes (customAttribute1…customAttribute10) accept up to 1000 characters each and are suitable for long free-form text such as personalized messages, AI-generated notes, or internal annotations.",
+        "Create, update, upsert, add, register, save, or modify a lead (contact, prospect) and attach it to a specific audience. Idempotent: existing leads are updated in place; new ones are created. The `audience` parameter is the audience NAME (not ID) and is REQUIRED — if you don't have one, call list_audiences to pick one or create_audience_from_linkedin_url to create one. Identify the lead by AT LEAST ONE of: leadId, proEmail, persoEmail, linkedinUrl, twitter, OR firstname+lastname (plus companyName or companyUrl to disambiguate). All other profile fields are optional. The 10 custom attribute slots (customAttribute1…customAttribute10, max 1000 chars each) accept long free-form text — suitable for personalized AI-generated messages, internal notes, context blobs, or any per-lead metadata your workflow needs. Synonyms: create lead, update lead, upsert lead, add lead, add contact, add prospect, save lead, register lead, push lead, attach lead to audience, sync lead, modify lead, edit lead, ensure lead exists, store custom attributes on lead.",
       inputSchema: {
         audience: z
           .string()
@@ -840,7 +840,7 @@ export const registerTools = (server: McpServer) => {
     "enrich_lead",
     {
       description:
-        "Enrich a single lead with pro email and/or LinkedIn profile fields. Three enrichTypes: EMAIL_ENRICH (default, up to 5 credits, finds pro email) — works without leadId; LINKEDIN_ENRICH (up to 1 credit, fills LinkedIn fields) — REQUIRES leadId; FULL_ENRICH (up to 5 credits, both) — REQUIRES leadId. Costs shown are upper bounds — LGM may not charge when no enrichment data is found (e.g. status `not_found`). Always uses polling mode: returns an enrichRequestId you resolve via get_enrich_result. CONFIRMATION REQUIRED (two-step lockstep): (1) call with `confirm: false` (or omit) to get a cost-vs-balance preview. (2) present the cost to the user and get explicit approval. (3) re-call with BOTH `confirm: true` AND `acknowledgedCostCredits` set to the exact cost from the preview. The tool refuses to spend without this lockstep. Identify the lead by leadId (preferred) or firstname+lastname (+ companyName / companyUrl / linkedinUrl to improve matching).",
+        "Enrich, find, append, complete, refresh, or look up a single lead's missing data — pro email and/or LinkedIn profile fields (job title, company, location, bio, etc.). Three enrichTypes drive what's looked up and how much it costs: EMAIL_ENRICH (default, up to 5 credits, finds pro email + email status valid/risky/etc.) — works WITHOUT leadId, can match by firstname+lastname+company; LINKEDIN_ENRICH (up to 1 credit, refreshes LinkedIn profile fields on the lead) — REQUIRES leadId; FULL_ENRICH (up to 5 credits, both at once) — REQUIRES leadId. Costs shown are upper bounds — LGM may not charge when no enrichment data is found (status `not_found`). Always uses polling mode: returns an enrichRequestId you resolve later via get_enrich_result. CONFIRMATION REQUIRED — two-step lockstep: (1) call with `confirm: false` (or omit) to get a cost-vs-balance preview. (2) present the cost to the user and get explicit approval. (3) re-call with BOTH `confirm: true` AND `acknowledgedCostCredits` set to the exact cost from the preview. The tool refuses to spend otherwise. Identify the lead by leadId (preferred — use search_lead to find it) or firstname+lastname (plus companyName / companyUrl / linkedinUrl to improve matching). Synonyms: enrich lead, find email, find pro email, get email, lookup email, email finder, refresh LinkedIn, refresh profile, complete profile, append data, fill missing fields, lead enrichment, data enrichment, B2B enrichment, find contact info, email lookup.",
       inputSchema: {
         confirm: z
           .boolean()
@@ -1027,7 +1027,7 @@ export const registerTools = (server: McpServer) => {
     "bulk_enrich_audience",
     {
       description:
-        "Enrich leads in an audience in one batch — N pages worth (each page = leadsPerPage leads). Fetches the leads (auto-paginated), then loops POST /leads/enrich (polling mode) for each, throttled to respect LGM's 50-calls/10s rate limit. TWO USER QUESTIONS REQUIRED before calling: (1) ASK HOW MANY PAGES: 1, 2, 5, 10, 20, or 'all'? Never assume. (2) ASK FOR CONFIRMATION ON COST: run with `confirm: false` first to get a cost-vs-balance preview, surface it to the user, get explicit approval, then re-call with BOTH `confirm: true` AND `acknowledgedCostCredits` exactly matching the preview's estimatedTotalCostCredits. The tool refuses to spend without this lockstep. Preview cost is an upper bound — LGM may not charge for leads where enrichment finds no data (status `not_found`). Returns the audience URL so the user can watch enrichments stream in via the LGM UI.",
+        "Bulk enrich, mass enrich, batch enrich, or run an enrichment campaign on ALL leads (or N pages worth of leads) in an audience at once. Fetches the leads with auto-pagination, then loops POST /leads/enrich (polling mode) for each, throttled to respect LGM's 50-calls/10s rate limit, with graceful 429 recovery (partial-results + resume hint). TWO USER QUESTIONS REQUIRED before calling: (1) ASK HOW MANY PAGES: 1, 2, 5, 10, 20, or 'all' (capped at 20 pages = 2000 leads)? Never assume. Each page = leadsPerPage leads, default 100. (2) ASK FOR CONFIRMATION ON COST: run with `confirm: false` first to get a cost-vs-balance preview, surface the cost (and the audience URL) to the user, get explicit approval, then re-call with BOTH `confirm: true` AND `acknowledgedCostCredits` exactly matching the preview's estimatedTotalCostCredits. The tool refuses to spend otherwise. Preview cost is an upper bound — LGM may not charge for leads where enrichment finds no data (status `not_found`). Returns the audience URL so the user can watch enrichments stream live into the LGM UI. Synonyms: bulk enrich, mass enrich, batch enrich, enrich audience, enrich all leads, enrich list, find emails for audience, refresh audience LinkedIn, complete audience data, enrich every lead, enrichment campaign, bulk email finder, audience-wide enrichment.",
       inputSchema: {
         audienceId: z
           .string()
@@ -1272,7 +1272,7 @@ export const registerTools = (server: McpServer) => {
     "get_enrich_result",
     {
       description:
-        "Retrieve the result of an enrichment request previously started by enrich_lead or bulk_enrich_audience (polling mode). Returns `status: pending | completed | failed` and, when completed, the enriched data (proEmail, persoEmail, phone, etc.). Polling tip: enrichments usually complete within seconds to a minute — wait a beat before polling, and avoid tight loops to respect the 50-calls/10s rate limit.",
+        "Retrieve, poll, check, fetch, or look up the result of an enrichment request previously started by enrich_lead or bulk_enrich_audience (polling mode). Returns `status` (one of: pending / enriched / completed / failed / not_found) and, when finished, the enriched data — pro email, perso email, phone, refreshed LinkedIn profile fields, email validity status (valid / risky / unknown / etc.). Polling tip: enrichments usually complete within seconds to a minute — wait a beat before polling, and avoid tight loops to respect the 50-calls/10s rate limit. Synonyms: get enrichment result, check enrichment, poll enrich, enrichment status, enrich result, fetch enrich, retrieve enrich, is the email ready, did the enrichment work, enrichment outcome.",
       inputSchema: {
         enrichRequestId: z
           .string()
@@ -1307,7 +1307,7 @@ export const registerTools = (server: McpServer) => {
     "get_all_audience_leads",
     {
       description:
-        "Fetch N pages worth of leads from an audience in one call, auto-paginated and throttled. Use this instead of get_audience_leads when you want to operate on multiple pages at once (e.g. before bulk_enrich_audience, or to enumerate the whole audience). ALWAYS ASK THE USER WHICH VALUE TO USE for `pages` before calling — options: 1, 2, 5, 10, 20, or 'all'. Never assume. 'all' is capped at 20 pages (2000 leads with default leadsPerPage=100) as a safety ceiling — for larger audiences, fall back to get_audience_leads with manual skip pagination.",
+        "Fetch, retrieve, list, export, enumerate, or paginate through N pages worth of leads (contacts, prospects) from a specific audience in one auto-paginated call. Unlike get_audience_leads (one page at a time, max 100 leads), this tool loops the API for you, throttled to respect the 50-calls/10s rate limit. ALWAYS ASK THE USER WHICH VALUE TO USE for `pages` before calling — options: 1, 2, 5, 10, 20, or 'all'. Never assume. 'all' is capped at 20 pages (2000 leads with default leadsPerPage=100) as a safety ceiling — for larger audiences, fall back to get_audience_leads with manual skip pagination. Use to operate on multiple pages at once (e.g. before bulk_enrich_audience), to export the whole audience, or to enumerate leads for downstream processing or analysis. Synonyms: get all leads, list audience leads, export audience leads, all contacts in audience, enumerate audience, fetch all leads, paginate audience, full audience contents, dump audience, audience export.",
       inputSchema: {
         audienceId: z
           .string()
@@ -1370,7 +1370,7 @@ export const registerTools = (server: McpServer) => {
     "get_credits",
     {
       description:
-        "Get the current credit balance for the authenticated account. Returns `total` (all credits available) and `perishable` (credits that expire soon — already included in total). Use this to check before running enrich_lead or bulk_enrich_audience.",
+        "Get, check, view, display, or report the current credit balance, wallet, account credits, or solde for the authenticated La Growth Machine account. Returns `total` (all credits available) and `perishable` (credits that expire soon — already included in total). Use to check the wallet before running credit-spending tools (enrich_lead, bulk_enrich_audience), to surface the balance to the user when they ask, or to plan upcoming enrichment workloads against the budget. Synonyms: credits, credit balance, solde, mon solde, wallet, account balance, available credits, remaining credits, credits left, how many credits, enrichment budget, credit budget, account credits.",
       inputSchema: {},
       annotations: {
         title: "Get Credits",

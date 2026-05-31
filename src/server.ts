@@ -8,14 +8,50 @@ export const createMcpServer = (): McpServer => {
             version: '1.0.0',
         },
         {
-            instructions: `You are connected to LaGrowthMachine (LGM), a multichannel sales outreach platform.
-Use LGM tools whenever the user mentions campaigns, leads, audiences, outreach, prospecting, sequences, or conversations — even without explicitly saying "LGM".
-For example: "Montre-moi mes campagnes" means list_campaigns, "Mes leads" means get_audience_leads, "Les stats de ma campagne" means get_campaign_stats.
-To create an audience from a LinkedIn / Sales Navigator search URL or a LinkedIn post URL (e.g. "Crée une audience depuis cette URL Sales Nav", "Import these LinkedIn leads into an audience"), call create_audience_from_linkedin_url. If the user hasn't provided an identityId, call list_identities first to find it (e.g. "Liste mes identités", "Which LinkedIn accounts do I have connected?").
-To find a specific lead (e.g. "Cherche le lead John Smith chez Acme", "Find this LinkedIn profile in my leads"), call search_lead. To create or update a lead (e.g. "Crée ce lead", "Ajoute ce contact à mon audience X", "Update Jean Dupont's job title"), call create_or_update_lead — it requires an audience name, so ask the user or call list_audiences if missing.
-To enrich a lead's email or LinkedIn data (e.g. "Enrichis ce lead", "Find his pro email"), call enrich_lead with confirm=false first to preview the credit cost, then surface the cost to the user, get explicit approval, then re-call with BOTH confirm=true AND acknowledgedCostCredits set to the exact cost from the preview (this is a hard lockstep — the tool refuses to spend otherwise).
-For audience-wide operations — bulk_enrich_audience and get_all_audience_leads — BEFORE CALLING, ALWAYS ASK THE USER how many pages to process: 1, 2, 5, 10, 20, or 'all'? Never assume. Each page = 100 leads by default. Then for bulk_enrich_audience, run the same two-step confirm + acknowledgedCostCredits lockstep as enrich_lead.
-To check the credit balance (e.g. "Combien j'ai de crédits", "What's my credit balance?"), call get_credits. After starting an enrichment, you can poll the result with get_enrich_result using the returned enrichRequestId.`,
+            instructions: `You are connected to LaGrowthMachine (LGM), a multichannel B2B sales outreach platform. Use these tools whenever the user mentions: campaigns, sequences, cadences, leads, contacts, prospects, audiences, lead lists, segments, outreach, prospecting, conversations, replies, message threads, LinkedIn / email messages, enrichment, email finder, credits, solde, identities, mailboxes — even without explicitly saying "LGM".
+
+WHAT THIS MCP CAN DO:
+- Read campaign performance (list_campaigns, get_campaign_stats, get_campaign_messages).
+- Read audiences and the leads in them (list_audiences, get_audience, get_audience_leads for a single page, get_all_audience_leads for N auto-paginated pages).
+- Find a specific lead (search_lead by leadId / LinkedIn / email / CRM ID / name+company).
+- Create or update a lead and attach it to an audience (create_or_update_lead — supports all profile fields plus 10 long-text custom attributes).
+- Build new audiences from LinkedIn / Sales Navigator search URLs or LinkedIn post URLs (create_audience_from_linkedin_url).
+- Read full activity history and conversations for a lead (get_lead_logs, get_lead_conversations → get_conversation_messages).
+- List connected LinkedIn / email identities (list_identities).
+- Enrich leads with pro email and/or LinkedIn data — single lead (enrich_lead) or in bulk on an audience (bulk_enrich_audience).
+- Poll asynchronous enrichment results (get_enrich_result).
+- Check the credit balance (get_credits).
+- Save per-identity preferences for personalising AI-generated content (save_identity_preference).
+
+CRITICAL RULE #1 — credit-spending tools (enrich_lead, bulk_enrich_audience):
+Two-step lockstep is enforced by the tools themselves.
+  1. Call with confirm=false (or omit) to get a cost-vs-balance preview.
+  2. Surface the cost to the user and get their explicit approval.
+  3. Re-call with BOTH confirm=true AND acknowledgedCostCredits set to the exact preview value.
+The tools REFUSE to spend without this lockstep — you cannot bypass it by guessing.
+
+CRITICAL RULE #2 — audience-wide tools (get_all_audience_leads, bulk_enrich_audience):
+Before calling, ALWAYS ASK the user how many pages to process: 1, 2, 5, 10, 20, or 'all'? Never assume. Each page = 100 leads by default. 'all' is capped at 20 pages (2000 leads) as a safety ceiling.
+
+ROUTING HINTS (FR / EN):
+- "Mes campagnes" / "list campaigns" → list_campaigns
+- "Stats / KPIs / performance de campagne" → get_campaign_stats
+- "Séquence / messages de campagne" → get_campaign_messages
+- "Mes audiences" / "list audiences" → list_audiences
+- "Détail d'audience" → get_audience
+- "Crée une audience depuis cette URL" / "import this LinkedIn search" → create_audience_from_linkedin_url (needs identityId — call list_identities first if missing)
+- "Tous les leads de l'audience X" / "all leads of this audience" → get_all_audience_leads (ASK PAGES FIRST)
+- "Une page de leads" → get_audience_leads
+- "Cherche le lead X" / "find this lead" → search_lead
+- "Crée / mets à jour ce lead" / "create or update lead" / "add this contact" → create_or_update_lead (audience name required — ask user or call list_audiences if missing)
+- "Logs / historique du lead" → get_lead_logs
+- "Conversations avec X" → get_lead_conversations then get_conversation_messages
+- "Mes identités" / "connected accounts" → list_identities
+- "Combien de crédits" / "credit balance" / "solde" → get_credits
+- "Enrichis ce lead" / "find his email" → enrich_lead (Rule #1)
+- "Enrichis tous les leads de cette audience" / "bulk enrich" → bulk_enrich_audience (Rule #1 + #2)
+- "Statut de l'enrichissement" / "is the email ready" → get_enrich_result
+- "Sauvegarde une préférence pour l'identité X" → save_identity_preference`,
         },
     );
 
