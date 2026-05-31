@@ -73,8 +73,7 @@ Pulls your campaign stats and sequences via the MCP, then runs a structured anal
 - **Segmentation Advisor** — Audit your audience targeting and flag ICP mismatches before they hurt performance
 - **Copywriting Coach** — Review your message sequences against outreach best practices and rewrite underperforming steps
 
-All LGM Skills are available at:
-[lagrowthmachine.com/.well-known/skills/index.json](https://lagrowthmachine.com/.well-known/skills/index.json?utm_source=claude&utm_medium=mcp&utm_campaign=claude-store)
+All LGM Skills are available at: [https://github.com/laGrowthMachine/gtm-system](https://github.com/laGrowthMachine/gtm-system)
 
 ---
 
