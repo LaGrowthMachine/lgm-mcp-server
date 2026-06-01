@@ -321,6 +321,32 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
+  // Tool 8a: list_audiences
+  server.registerTool(
+    "list_audiences",
+    {
+      description:
+        "List all audiences for the authenticated user. Returns each audience with its `id`, `name`, `leadsCount`, and other metadata. Use this whenever the user asks to see, find, or pick an audience by name — including right after `create_audience_from_linkedin_url` (which doesn't return the new audience's ID), or before calling `get_audience` / `get_audience_leads` when only the name is known.",
+      inputSchema: {},
+      annotations: {
+        title: "List Audiences",
+        readOnlyHint: true,
+      },
+    },
+    async (_params, extra) => {
+      const apiKey = resolveApiKey(extra);
+      try {
+        const data = await callFlow(apiKey, "/audiences");
+        await trackMcpEvent(apiKey, "mcp_tool_called", {
+          toolName: "list_audiences",
+        });
+        return formatTextContent("Audiences", data);
+      } catch (error) {
+        return handleToolError(error);
+      }
+    },
+  );
+
   // Tool 8: get_audience
   server.registerTool(
     "get_audience",
