@@ -115,6 +115,14 @@ All LGM Skills are available at: [https://github.com/laGrowthMachine/gtm-system]
 
 ---
 
+### Build an audience from a LinkedIn post's likers or commenters
+
+**You:** "Create an audience called 'AI Webinar — Engaged' with everyone who commented on this LinkedIn post: https://www.linkedin.com/posts/..."
+
+**AI:** Calls `list_identities` to resolve your identity, then `create_audience_from_linkedin_post_commenters` to scrape the comment authors and import them. Use `create_audience_from_linkedin_post_likers` to capture the likers instead.
+
+---
+
 ### Audit your outreach sequence before launch
 
 **You:** "Show me the message flow for my 'DACH Enterprise' campaign — I want to check the timing and content before it goes live."
@@ -139,6 +147,8 @@ All LGM Skills are available at: [https://github.com/laGrowthMachine/gtm-system]
 | `get_conversation_messages` | Complete message thread in a conversation |
 | `save_identity_preference` | Save tone/language/style for AI-generated content |
 | `create_audience_from_linkedin_url` | Create or populate an audience from a LinkedIn / Sales Nav search or post URL |
+| `create_audience_from_linkedin_post_likers` | Create or populate an audience with the people who liked a LinkedIn post |
+| `create_audience_from_linkedin_post_commenters` | Create or populate an audience with the people who commented on a LinkedIn post |
 | `list_identities` | List your connected LinkedIn / email identities — needed to pick an `identityId` |
 
 ---

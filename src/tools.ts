@@ -44,6 +44,86 @@ const handleToolError = (
   };
 };
 
+const registerPostEngagementTool = (
+  server: McpServer,
+  config: {
+    name: string;
+    title: string;
+    engagementNoun: string;
+    engagementClause: string;
+    category: "like" | "comment";
+  },
+) => {
+  server.registerTool(
+    config.name,
+    {
+      description: `Create a new audience (or populate an existing one) with the people who ${config.engagementClause} a specific LinkedIn post. Use this when the user wants to import ${config.engagementNoun}. Set \`autoImport: true\` when the user wants to keep capturing new ${config.engagementNoun} as they engage with the post going forward (e.g. "keep adding new ${config.engagementNoun}", "monitor this post"). The \`audience\` parameter is a NAME, not an ID — if no audience with that name exists, LGM creates one; if it does, leads are added to it. Requires an \`identityId\` from list_identities; the underlying LinkedIn account must be connected and the LGM widget open during the import. Import runs asynchronously — poll get_audience to check status.`,
+      inputSchema: {
+        audience: z
+          .string()
+          .min(1)
+          .max(100)
+          .describe(
+            "Name (not ID) of the audience to populate. Creates it if it doesn't exist.",
+          ),
+        linkedinUrl: z
+          .string()
+          .url()
+          .regex(
+            /^https:\/\/(www\.)?linkedin\.com\/(posts|feed\/update)\//,
+            "A valid LinkedIn post URL is required (must be a /posts/ or /feed/update/ URL on linkedin.com)",
+          )
+          .describe(
+            `URL of the LinkedIn post whose ${config.engagementNoun} should be imported`,
+          ),
+        identityId: z
+          .string()
+          .describe(
+            "Identity to impersonate for the scrape (24-character hex ObjectId). Use list_identities to find it.",
+          ),
+        excludeContactedLeads: z
+          .boolean()
+          .optional()
+          .describe("Exclude leads who have already been contacted"),
+        autoImport: z
+          .boolean()
+          .optional()
+          .describe(
+            `Keep importing new ${config.engagementNoun} as they engage with the post going forward. Use when the user wants ongoing monitoring of the post, not just a one-shot snapshot.`,
+          ),
+      },
+      annotations: {
+        title: config.title,
+        destructiveHint: false,
+      },
+    },
+    async (params, extra) => {
+      const apiKey = resolveApiKey(extra);
+      try {
+        const data = await callFlow(
+          apiKey,
+          "/audiences",
+          {
+            audience: params.audience,
+            linkedinUrl: params.linkedinUrl,
+            identityId: params.identityId,
+            linkedinPostCategory: config.category,
+            excludeContactedLeads: params.excludeContactedLeads,
+            autoImport: params.autoImport,
+          },
+          { method: "POST" },
+        );
+        await trackMcpEvent(apiKey, "mcp_tool_called", {
+          toolName: config.name,
+        });
+        return formatTextContent("Audience Created", data);
+      } catch (error) {
+        return handleToolError(error);
+      }
+    },
+  );
+};
+
 export const registerTools = (server: McpServer) => {
   // Tool 1: list_campaigns
   server.registerTool(
@@ -408,7 +488,7 @@ export const registerTools = (server: McpServer) => {
     "create_audience_from_linkedin_url",
     {
       description:
-        "Create a new audience (or populate an existing one) by importing leads from a LinkedIn Regular search URL, a Sales Navigator search URL, or a LinkedIn post URL. The `audience` parameter is a NAME, not an ID — if no audience with that name exists, LGM creates one; if it does, leads are added to it. Requires an `identityId` from list_identities; the underlying LinkedIn account must be connected and the LGM widget open during the import. Import runs asynchronously — poll get_audience to check status.",
+        "Create a new audience (or populate an existing one) by importing leads from a LinkedIn Regular search URL or a Sales Navigator search URL. For LinkedIn post URLs, use `create_audience_from_linkedin_post_likers` or `create_audience_from_linkedin_post_commenters` instead. The `audience` parameter is a NAME, not an ID — if no audience with that name exists, LGM creates one; if it does, leads are added to it. Requires an `identityId` from list_identities; the underlying LinkedIn account must be connected and the LGM widget open during the import. Import runs asynchronously — poll get_audience to check status.",
       inputSchema: {
         audience: z
           .string()
@@ -425,18 +505,12 @@ export const registerTools = (server: McpServer) => {
             "A valid LinkedIn URL is required (must start with https://www.linkedin.com/)",
           )
           .describe(
-            "LinkedIn Regular search URL, Sales Navigator search URL, or LinkedIn post URL",
+            "LinkedIn Regular search URL or Sales Navigator search URL (for post URLs, use the dedicated likers/commenters tools)",
           ),
         identityId: z
           .string()
           .describe(
             "Identity to impersonate for the scrape (24-character hex ObjectId). Use list_identities to find it.",
-          ),
-        linkedinPostCategory: z
-          .enum(["like", "comment"])
-          .optional()
-          .describe(
-            "When linkedinUrl is a LinkedIn post, scrape leads by engagement type: 'like' or 'comment'",
           ),
         excludeContactedLeads: z
           .boolean()
@@ -462,7 +536,6 @@ export const registerTools = (server: McpServer) => {
             audience: params.audience,
             linkedinUrl: params.linkedinUrl,
             identityId: params.identityId,
-            linkedinPostCategory: params.linkedinPostCategory,
             excludeContactedLeads: params.excludeContactedLeads,
             autoImport: params.autoImport,
           },
@@ -478,7 +551,25 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  // Tool 11: list_identities
+  // Tool 11: create_audience_from_linkedin_post_likers
+  registerPostEngagementTool(server, {
+    name: "create_audience_from_linkedin_post_likers",
+    title: "Create Audience from LinkedIn Post Likers",
+    engagementNoun: "likers",
+    engagementClause: "LIKED",
+    category: "like",
+  });
+
+  // Tool 12: create_audience_from_linkedin_post_commenters
+  registerPostEngagementTool(server, {
+    name: "create_audience_from_linkedin_post_commenters",
+    title: "Create Audience from LinkedIn Post Commenters",
+    engagementNoun: "commenters",
+    engagementClause: "COMMENTED on",
+    category: "comment",
+  });
+
+  // Tool 13: list_identities
   server.registerTool(
     "list_identities",
     {
